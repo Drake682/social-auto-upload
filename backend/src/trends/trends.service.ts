@@ -25,12 +25,13 @@ export class TrendsService {
    * For each platform, returns the top 10 keywords by volume
    * from the most recent crawl batch.
    */
-  async getLatest(): Promise<GroupedTrends[]> {
-    // Find the single most recent extracted_at timestamp
-    const latestRun = await this.trendRepository.findOne({
-      where: {},
-      order: { extracted_at: 'DESC' },
-    });
+  async getLatest(tenantId: number): Promise<GroupedTrends[]> {
+    // Find the latest tenant-visible extraction timestamp.
+    const latestRun = await this.trendRepository
+      .createQueryBuilder('trend')
+      .where('trend.tenant_id = :tenantId OR trend.tenant_id IS NULL', { tenantId })
+      .orderBy('trend.extracted_at', 'DESC')
+      .getOne();
 
     if (!latestRun) {
       return [];
@@ -41,15 +42,14 @@ export class TrendsService {
     const windowStart = new Date(latestTime.getTime() - 1000);
     const windowEnd = new Date(latestTime.getTime() + 1000);
 
-    const allLatest = await this.trendRepository.find({
-      where: {},
-      order: { volume: 'DESC' },
-    });
+    const allLatest = await this.trendRepository
+      .createQueryBuilder('trend')
+      .where('trend.tenant_id = :tenantId OR trend.tenant_id IS NULL', { tenantId })
+      .andWhere('trend.extracted_at BETWEEN :windowStart AND :windowEnd', { windowStart, windowEnd })
+      .orderBy('trend.volume', 'DESC')
+      .getMany();
 
-    // Filter to only the latest batch
-    const latestBatch = allLatest.filter(
-      (t) => t.extracted_at >= windowStart && t.extracted_at <= windowEnd,
-    );
+    const latestBatch = allLatest;
 
     // Group by platform, take top 10 per platform
     const platformMap = new Map<string, Trend[]>();

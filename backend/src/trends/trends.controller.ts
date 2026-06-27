@@ -1,6 +1,7 @@
 import { Controller, Get, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
 import { TrendsService } from './trends.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 
 @Controller('trends')
 @UseGuards(JwtAuthGuard)
@@ -14,8 +15,8 @@ export class TrendsController {
    */
   @Get('latest')
   @HttpCode(HttpStatus.OK)
-  async getLatest() {
-    const data = await this.trendsService.getLatest();
+  async getLatest(@CurrentUser() user: any) {
+    const data = await this.trendsService.getLatest(user.tenantId);
     return {
       code: 200,
       data,

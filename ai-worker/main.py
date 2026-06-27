@@ -20,9 +20,7 @@ from database import engine, SessionLocal
 from models import AffiliateProduct, Base, Trend, TrendType, VideoJob, VideoJobStatus
 from scrapers import ProductScraperAPI, TrendScraperAPI
 from storage import download_s3_uri, upload_file
-from video_factory.editor_ffmpeg import FFmpegEditor
-from video_factory.generator_script import generate_script
-from video_factory.generator_voice import generate_voice
+from video_engine import VideoNormalizer
 
 # Environment
 TREND_INTERVAL_MINUTES = int(os.getenv("TREND_INTERVAL_MINUTES", "120"))
@@ -248,6 +246,9 @@ class VideoProcessRequest(BaseModel):
     user_id: int
     tenant_id: int
     source_s3_uri: str | None = None
+    horizontal_flip: bool = False
+    speed: float = 1.0
+    fps: int | None = None
 
 
 def _update_job_status(
@@ -285,65 +286,100 @@ def _update_job_status(
         db.close()
 
 
+def _get_job_source_s3_uri(
+    job_id: str,
+    user_id: int,
+    tenant_id: int,
+    request_source_s3_uri: str | None,
+) -> str:
+    if request_source_s3_uri:
+        return request_source_s3_uri
+
+    db = SessionLocal()
+    try:
+        job = (
+            db.query(VideoJob)
+            .filter(
+                VideoJob.id == job_id,
+                VideoJob.user_id == user_id,
+                VideoJob.tenant_id == tenant_id,
+            )
+            .first()
+        )
+        if not job:
+            raise ValueError(f"VideoJob {job_id} not found")
+        if not job.source_s3_uri:
+            raise ValueError(f"VideoJob {job_id} has no source_s3_uri")
+        return job.source_s3_uri
+    finally:
+        db.close()
+
+
+def _remove_temp_file(path: str | None) -> None:
+    if not path:
+        return
+    try:
+        if os.path.isfile(path):
+            os.remove(path)
+            logger.info("Temp file removed: %s", path)
+    except OSError as exc:
+        logger.warning("Temp file cleanup failed for %s: %s", path, exc)
+
+
 def _process_video(
     job_id: str,
     topic: str,
     user_id: int,
     tenant_id: int,
     source_s3_uri: str | None,
+    horizontal_flip: bool,
+    speed: float,
+    fps: int | None,
 ) -> None:
-    """Background task: render in temp storage, then upload final media to S3."""
-    logger.info("Pipeline start — job=%s tenant=%s topic=%s", job_id, tenant_id, topic)
+    """Background task: pull source media from S3, normalize, upload processed MP4."""
+    logger.info("Media normalization start — job=%s tenant=%s topic=%s", job_id, tenant_id, topic)
 
+    source_path: str | None = None
+    output_path: str | None = None
     try:
         with tempfile.TemporaryDirectory(prefix=f"video-{job_id}-") as job_dir:
-            # --- Step 1: Generate Script ---
-            _update_job_status(job_id, user_id, tenant_id, VideoJobStatus.GENERATING_SCRIPT, topic=topic)
-            script_text = generate_script(topic)
-            logger.info("Script ready (%d chars): %.80s...", len(script_text), script_text)
+            source_path = os.path.join(job_dir, "source.mp4")
+            output_path = os.path.join(job_dir, "normalized.mp4")
 
-            # --- Step 2: Text-to-Speech ---
-            _update_job_status(job_id, user_id, tenant_id, VideoJobStatus.GENERATING_VOICE, script=script_text)
-            audio_path = os.path.join(job_dir, "narration.mp3")
-            asyncio.run(generate_voice(script_text, audio_path))
-            logger.info("TTS audio saved: %s", audio_path)
+            resolved_source_s3_uri = _get_job_source_s3_uri(
+                job_id,
+                user_id,
+                tenant_id,
+                source_s3_uri,
+            )
+            _update_job_status(job_id, user_id, tenant_id, VideoJobStatus.RENDERING, topic=topic)
 
-            # --- Step 3: Render — merge audio onto source video ---
-            audio_key = f"tenants/{tenant_id}/users/{user_id}/video-jobs/{job_id}/narration.mp3"
-            audio_s3_uri = upload_file(audio_path, audio_key, "audio/mpeg")
-            _update_job_status(job_id, user_id, tenant_id, VideoJobStatus.RENDERING, audio_url=audio_s3_uri)
+            download_s3_uri(resolved_source_s3_uri, tenant_id, source_path)
+            logger.info("Source downloaded — job=%s path=%s", job_id, source_path)
 
-            source_path = STOCK_VIDEO
-            if source_s3_uri:
-                source_path = os.path.join(job_dir, "source.mp4")
-                download_s3_uri(source_s3_uri, tenant_id, source_path)
+            VideoNormalizer().normalize(
+                source_path,
+                output_path,
+                horizontal_flip=horizontal_flip,
+                speed=speed,
+                fps=fps,
+            )
 
-            output_path = os.path.join(job_dir, "final.mp4")
-            if os.path.isfile(source_path):
-                FFmpegEditor.merge_audio_video(source_path, audio_path, output_path)
-                logger.info("Render complete: %s", output_path)
-            else:
-                logger.warning(
-                    "Source video not found at %s — uploading audio-only fallback",
-                    source_path,
-                )
-                output_path = audio_path
-
-            # --- Step 4: Done ---
-            content_type = "video/mp4" if output_path.endswith(".mp4") else "audio/mpeg"
-            media_key = f"tenants/{tenant_id}/users/{user_id}/video-jobs/{job_id}/final.{ 'mp4' if content_type == 'video/mp4' else 'mp3' }"
-            media_s3_uri = upload_file(output_path, media_key, content_type)
+            media_key = f"tenants/{tenant_id}/processed_videos/{job_id}.mp4"
+            media_s3_uri = upload_file(output_path, media_key, "video/mp4")
             _update_job_status(
                 job_id,
                 user_id,
                 tenant_id,
                 VideoJobStatus.DONE,
                 video_url=media_s3_uri,
+                source_s3_uri=resolved_source_s3_uri,
+                progress=100,
             )
-            logger.info("Pipeline complete — job=%s output=%s", job_id, media_s3_uri)
+            logger.info("Media normalization complete — job=%s output=%s", job_id, media_s3_uri)
 
     except Exception as exc:
-        logger.error("Pipeline failed — job=%s: %s", job_id, exc, exc_info=True)
+        logger.error("Media normalization failed — job=%s: %s", job_id, exc, exc_info=True)
         _update_job_status(
             job_id,
             user_id,
@@ -351,6 +387,9 @@ def _process_video(
             VideoJobStatus.FAILED,
             error_log=str(exc),
         )
+    finally:
+        _remove_temp_file(source_path)
+        _remove_temp_file(output_path)
 
 
 @app.post("/video/process")
@@ -358,13 +397,15 @@ async def process_video(req: VideoProcessRequest, background_tasks: BackgroundTa
     logger.info("Received job %s for tenant %s topic %s", req.job_id, req.tenant_id, req.topic)
 
     try:
+        pending_fields = {"topic": req.topic}
+        if req.source_s3_uri:
+            pending_fields["source_s3_uri"] = req.source_s3_uri
         _update_job_status(
             req.job_id,
             req.user_id,
             req.tenant_id,
             VideoJobStatus.PENDING,
-            topic=req.topic,
-            source_s3_uri=req.source_s3_uri,
+            **pending_fields,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -376,16 +417,31 @@ async def process_video(req: VideoProcessRequest, background_tasks: BackgroundTa
         req.user_id,
         req.tenant_id,
         req.source_s3_uri,
+        req.horizontal_flip,
+        req.speed,
+        req.fps,
     )
     return {"job_id": req.job_id, "status": "accepted"}
 
 
 @app.get("/video/status/{job_id}")
-async def get_job_status(job_id: str):
-    """Check the current status of a video processing job."""
+async def get_job_status(
+    job_id: str,
+    tenant_id: int = Query(...),
+    user_id: int = Query(...),
+):
+    """Check the current status of a video processing job within tenant/user scope."""
     db = SessionLocal()
     try:
-        job = db.query(VideoJob).filter(VideoJob.id == job_id).first()
+        job = (
+            db.query(VideoJob)
+            .filter(
+                VideoJob.id == job_id,
+                VideoJob.tenant_id == tenant_id,
+                VideoJob.user_id == user_id,
+            )
+            .first()
+        )
         if not job:
             return {"error": "Job not found", "job_id": job_id}
         return {

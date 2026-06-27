@@ -87,7 +87,7 @@ services:
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-dev_refresh_secret_key_change_in_production}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-dev_encryption_key_change_in_prod}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
-      AI_WORKER_URL: http://fastapi_worker:8001
+      AI_WORKER_URL: ${AI_WORKER_URL:-http://fastapi_worker:8001}
       S3_ENDPOINT: http://minio:9000
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
       S3_REGION: ${S3_REGION:-us-east-1}
@@ -127,6 +127,7 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_URL: redis://redis:6379
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
       TREND_INTERVAL_MINUTES: ${TREND_INTERVAL_MINUTES:-120}
       SCRAPER_TIMEOUT_SECONDS: ${SCRAPER_TIMEOUT_SECONDS:-15}
       RAPIDAPI_KEY: ${RAPIDAPI_KEY:-}
@@ -137,7 +138,9 @@ services:
       FACEBOOK_TREND_QUERY: ${FACEBOOK_TREND_QUERY:-viral}
       STOCK_VIDEO_PATH: /app/assets/stock_background.mp4
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      TTS_VOICE: ${TTS_VOICE:-vi-VN-HoaiMyNeural}
       S3_ENDPOINT: http://minio:9000
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
       S3_REGION: ${S3_REGION:-us-east-1}
@@ -181,7 +184,18 @@ services:
       FB_HEADLESS: ${FB_HEADLESS:-1}
       FB_UPLOAD_TIMEOUT_MS: ${FB_UPLOAD_TIMEOUT_MS:-300000}
       FB_ACTION_TIMEOUT_MS: ${FB_ACTION_TIMEOUT_MS:-30000}
+      TIKTOK_HEADLESS: ${TIKTOK_HEADLESS:-1}
+      TIKTOK_UPLOAD_TIMEOUT_MS: ${TIKTOK_UPLOAD_TIMEOUT_MS:-300000}
+      TIKTOK_ACTION_TIMEOUT_MS: ${TIKTOK_ACTION_TIMEOUT_MS:-30000}
+      SHOPEE_HEADLESS: ${SHOPEE_HEADLESS:-1}
+      SHOPEE_UPLOAD_TIMEOUT_MS: ${SHOPEE_UPLOAD_TIMEOUT_MS:-300000}
+      SHOPEE_ACTION_TIMEOUT_MS: ${SHOPEE_ACTION_TIMEOUT_MS:-30000}
+      SHOPEE_UPLOAD_URL: ${SHOPEE_UPLOAD_URL:-https://creator.shopee.vn/}
       ERROR_LOGS_DIR: /app/error_logs
+      BROWSER_LOCALE: ${BROWSER_LOCALE:-vi-VN}
+      BROWSER_TIMEZONE_ID: ${BROWSER_TIMEZONE_ID:-Asia/Ho_Chi_Minh}
+      BROWSER_PROFILE_ROOT: /app/cookiesFile
+      BROWSER_USER_AGENT: ${BROWSER_USER_AGENT:-}
       S3_ENDPOINT: http://minio:9000
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
       S3_REGION: ${S3_REGION:-us-east-1}
