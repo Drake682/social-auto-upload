@@ -2,8 +2,11 @@ BEGIN;
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS tenant_id INTEGER;
 UPDATE users SET tenant_id = id WHERE tenant_id IS NULL;
-ALTER TABLE users ALTER COLUMN tenant_id SET NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_users_tenant_id ON users (tenant_id);
+
+UPDATE trends SET platform = 'unknown' WHERE platform IS NULL;
+UPDATE trends SET keyword = 'unknown' WHERE keyword IS NULL;
+UPDATE trends SET extracted_at = NOW() WHERE extracted_at IS NULL;
 
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS tenant_id INTEGER;
 UPDATE accounts a
