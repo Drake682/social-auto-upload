@@ -2,6 +2,8 @@ import logging
 import os
 from typing import Any
 
+import httpx
+
 from .base import AsyncHTTPClient, ScraperConfigError, rapidapi_headers
 
 logger = logging.getLogger(__name__)
@@ -41,10 +43,21 @@ class TrendScraperAPI:
             payload = await self.client.get_json(
                 self.facebook_api_url,
                 headers=rapidapi_headers(self.rapidapi_key, self.facebook_api_host),
+                params={"q": os.getenv("FACEBOOK_TREND_QUERY", "viral")},
             )
             return self._normalize_trends(payload, "facebook")
         except ScraperConfigError:
             logger.warning("Facebook trend API config missing; skipping")
+            return []
+        except httpx.HTTPStatusError as exc:
+            response_text = exc.response.text[:1000] if exc.response is not None else ""
+            logger.error(
+                "Facebook trend fetch HTTP %s failed: %s response=%s",
+                exc.response.status_code if exc.response is not None else "unknown",
+                exc,
+                response_text,
+                exc_info=True,
+            )
             return []
         except Exception as exc:
             logger.error("Facebook trend fetch failed: %s", exc, exc_info=True)
