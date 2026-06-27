@@ -1,33 +1,31 @@
 """
-SocialFlow AI Worker — Trend Engine
+SocialFlow AI Worker — Real-time Trend & Affiliate Data Mining Engine.
 FastAPI server + APScheduler for periodic trend data collection.
-Mockup mode: generates fake trend data every 1 minute for testing.
-Production: crawl TikTok Creative Center / Facebook every 2 hours.
 """
 
-import os
 import asyncio
 import logging
-import random
+import os
 import tempfile
-from datetime import datetime
-from fastapi import BackgroundTasks, FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from pydantic import BaseModel
+from datetime import datetime
+
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from database import engine, SessionLocal
-from models import Base, Trend, TrendPlatform, VideoJob, VideoJobStatus
+from models import AffiliateProduct, Base, Trend, TrendType, VideoJob, VideoJobStatus
+from scrapers import ProductScraperAPI, TrendScraperAPI
+from storage import download_s3_uri, upload_file
 from video_factory.editor_ffmpeg import FFmpegEditor
 from video_factory.generator_script import generate_script
 from video_factory.generator_voice import generate_voice
-from storage import download_s3_uri, upload_file
 
 # Environment
-TEST_MODE = os.getenv("TREND_TEST_MODE", "1") == "1"
-TREND_INTERVAL_MINUTES = int(os.getenv("TREND_INTERVAL_MINUTES", "1" if TEST_MODE else "120"))
+TREND_INTERVAL_MINUTES = int(os.getenv("TREND_INTERVAL_MINUTES", "120"))
 STOCK_VIDEO = os.getenv("STOCK_VIDEO_PATH", "./assets/stock_background.mp4")
 CORS_ORIGINS = [
     origin.strip()
@@ -40,71 +38,118 @@ logger = logging.getLogger(__name__)
 
 # --- Database init ---
 Base.metadata.create_all(bind=engine)
-logger.info("Trend tables ensured in database")
+logger.info("AI Worker tables ensured in database")
 
 
-# --- Mockup Trend Data ---
-MOCKUP_TRENDS: dict[TrendPlatform, list[dict[str, str | int]]] = {
-    TrendPlatform.TIKTOK: [
-        {"keyword": "#CapCut", "base_volume": 950000},
-        {"keyword": "#Tet2026", "base_volume": 780000},
-        {"keyword": "#LearnOnTikTok", "base_volume": 650000},
-        {"keyword": "#VietNamTrending", "base_volume": 520000},
-        {"keyword": "#DanceChallenge", "base_volume": 890000},
-        {"keyword": "#CookingHacks", "base_volume": 430000},
-        {"keyword": "#FashionHaul", "base_volume": 370000},
-    ],
-    TrendPlatform.FACEBOOK: [
-        {"keyword": "Lunar New Year", "base_volume": 820000},
-        {"keyword": "Reels Challenge", "base_volume": 710000},
-        {"keyword": "AI Art Generator", "base_volume": 550000},
-        {"keyword": "Travel Vietnam", "base_volume": 480000},
-        {"keyword": "Street Food", "base_volume": 440000},
-    ],
-    TrendPlatform.YOUTUBE: [
-        {"keyword": "Shorts Viral", "base_volume": 990000},
-        {"keyword": "Music Cover", "base_volume": 670000},
-        {"keyword": "Tech Reviews", "base_volume": 510000},
-        {"keyword": "Vlog Daily", "base_volume": 460000},
-        {"keyword": "Gaming Live", "base_volume": 730000},
-    ],
-}
-
-
-def crawl_trends():
-    """
-    Collect trend data and insert into PostgreSQL.
-    In mockup mode: generates randomized volumes around base values.
-    In production: uses Playwright to scrape TikTok/Facebook.
-    """
-    logger.info(f"Trend crawl starting (mockup={TEST_MODE})...")
-
+# --- Data Mining Engine ---
+def _persist_trends(items: list[dict], tenant_id: int | None = None) -> int:
     db = SessionLocal()
     try:
         count = 0
-        for platform, keywords in MOCKUP_TRENDS.items():
-            for item in keywords:
-                # Randomize volume ±25% to simulate fluctuation
-                jitter = random.uniform(0.75, 1.25)
-                volume = int(item["base_volume"] * jitter)
-
-                trend = Trend(
-                    platform=platform.value,
-                    keyword=item["keyword"],
-                    volume=volume,
-                    extracted_at=datetime.utcnow(),
+        now = datetime.utcnow()
+        for item in items:
+            keyword = item.get("keyword")
+            platform = item.get("platform")
+            if not keyword or not platform:
+                continue
+            trend_type = item.get("trend_type") or TrendType.VIDEO.value
+            if trend_type not in {TrendType.VIDEO.value, TrendType.AUDIO.value}:
+                trend_type = TrendType.VIDEO.value
+            db.add(
+                Trend(
+                    tenant_id=tenant_id,
+                    platform=str(platform)[:20],
+                    keyword=str(keyword)[:200],
+                    trend_type=trend_type,
+                    volume=item.get("volume"),
+                    source_url=item.get("source_url"),
+                    extracted_at=now,
                 )
-                db.add(trend)
-                count += 1
-
+            )
+            count += 1
         db.commit()
-        logger.info(f"Trend crawl complete — inserted {count} rows across {len(MOCKUP_TRENDS)} platforms")
-
-    except Exception as e:
+        return count
+    except Exception as exc:
         db.rollback()
-        logger.error(f"Trend crawl failed: {e}", exc_info=True)
+        logger.error("Trend persist failed: %s", exc, exc_info=True)
+        raise
     finally:
         db.close()
+
+
+async def sync_trends(tenant_id: int | None = None) -> dict[str, int]:
+    logger.info("Trend sync starting — tenant=%s", tenant_id or "global")
+    scraper = TrendScraperAPI()
+    tiktok_items, facebook_items = await asyncio.gather(
+        scraper.fetch_tiktok_trends(),
+        scraper.fetch_facebook_trends(),
+    )
+    all_items = [*tiktok_items, *facebook_items]
+    inserted = _persist_trends(all_items, tenant_id=tenant_id)
+    logger.info(
+        "Trend sync complete — inserted=%s tiktok=%s facebook=%s tenant=%s",
+        inserted,
+        len(tiktok_items),
+        len(facebook_items),
+        tenant_id or "global",
+    )
+    return {
+        "inserted": inserted,
+        "tiktok_count": len(tiktok_items),
+        "facebook_count": len(facebook_items),
+    }
+
+
+async def scrape_product(url: str, tenant_id: int, platform: str | None = None) -> dict:
+    scraper = ProductScraperAPI()
+    resolved_platform = platform or scraper.detect_platform(url)
+    if resolved_platform == "shopee":
+        product = await scraper.fetch_shopee_product(url)
+    elif resolved_platform == "tiktok":
+        product = await scraper.fetch_tiktok_product(url)
+    else:
+        raise ValueError("Unsupported product platform; expected shopee or tiktok")
+
+    if not product:
+        raise ValueError("Product scrape returned no data")
+
+    db = SessionLocal()
+    try:
+        row = AffiliateProduct(
+            tenant_id=tenant_id,
+            platform=product["platform"],
+            product_url=product["product_url"],
+            product_name=product["product_name"],
+            price=product.get("price"),
+            commission_rate=product.get("commission_rate"),
+            extracted_at=datetime.utcnow(),
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return {
+            "id": str(row.id),
+            "tenant_id": row.tenant_id,
+            "platform": row.platform,
+            "product_url": row.product_url,
+            "product_name": row.product_name,
+            "price": row.price,
+            "commission_rate": row.commission_rate,
+            "extracted_at": row.extracted_at.isoformat(),
+        }
+    except Exception as exc:
+        db.rollback()
+        logger.error("Product persist failed: %s", exc, exc_info=True)
+        raise
+    finally:
+        db.close()
+
+
+def crawl_trends_job():
+    try:
+        asyncio.run(sync_trends())
+    except Exception as exc:
+        logger.error("Scheduled trend sync failed: %s", exc, exc_info=True)
 
 
 # --- Scheduler ---
@@ -114,15 +159,15 @@ scheduler = BackgroundScheduler(daemon=True)
 def start_scheduler():
     trigger = IntervalTrigger(minutes=TREND_INTERVAL_MINUTES)
     scheduler.add_job(
-        crawl_trends,
+        crawl_trends_job,
         trigger=trigger,
-        id="trend_crawl_job",
-        name="Trend Crawl",
+        id="trend_sync_job",
+        name="Trend Sync",
         replace_existing=True,
-        max_instances=1,  # prevent overlap
+        max_instances=1,
     )
     scheduler.start()
-    logger.info(f"Scheduler started — interval={TREND_INTERVAL_MINUTES}min, mockup={TEST_MODE}")
+    logger.info("Scheduler started — interval=%smin", TREND_INTERVAL_MINUTES)
 
 
 def stop_scheduler():
@@ -134,16 +179,15 @@ def stop_scheduler():
 # --- FastAPI App ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("AI Worker starting — Trend Engine Initializing")
+    logger.info("AI Worker starting — Data Mining Engine Initializing")
     start_scheduler()
-    # Immediate first crawl so DB has data on startup
-    crawl_trends()
+    await sync_trends()
     yield
     stop_scheduler()
     logger.info("AI Worker shutting down")
 
 
-app = FastAPI(title="SocialFlow AI Worker — Trend Engine", lifespan=lifespan)
+app = FastAPI(title="SocialFlow AI Worker — Data Mining Engine", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
@@ -153,21 +197,47 @@ app.add_middleware(
 )
 
 
+class ProductScrapeRequest(BaseModel):
+    tenant_id: int
+    url: str
+    platform: str | None = None
+
+
 @app.get("/health")
 async def health_check():
     return {
         "status": "ok",
         "service": "ai-worker",
         "scheduler_running": scheduler.running,
-        "mockup_mode": TEST_MODE,
         "trend_interval_min": TREND_INTERVAL_MINUTES,
+        "engine": "real-time-data-mining",
         "timestamp": datetime.utcnow().isoformat(),
     }
 
 
 @app.get("/")
 async def root():
-    return {"message": "SocialFlow AI Worker API — Trend Engine + Video Factory"}
+    return {"message": "SocialFlow AI Worker API — Data Mining Engine + Video Factory"}
+
+
+@app.get("/trends/sync")
+async def trigger_trend_sync(tenant_id: int | None = Query(default=None)):
+    try:
+        result = await sync_trends(tenant_id=tenant_id)
+        return {"status": "ok", **result}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/products/scrape")
+async def trigger_product_scrape(req: ProductScrapeRequest):
+    try:
+        product = await scrape_product(req.url, tenant_id=req.tenant_id, platform=req.platform)
+        return {"status": "ok", "product": product}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 # --- Video Factory (Phase 4 Part 2) ---

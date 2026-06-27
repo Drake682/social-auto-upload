@@ -1,13 +1,14 @@
 """
 SQLAlchemy models for the AI Worker Trend Engine.
-Matches the eventual TypeORM entity in NestJS for shared DB access.
+Matches TypeORM entities in NestJS for shared DB access.
 """
 
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Float, Text, DateTime
+from sqlalchemy import Column, DateTime, Float, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase
 import enum
+import uuid
 
 
 class Base(DeclarativeBase):
@@ -18,21 +19,46 @@ class TrendPlatform(str, enum.Enum):
     TIKTOK = "tiktok"
     FACEBOOK = "facebook"
     YOUTUBE = "youtube"
+    SHOPEE = "shopee"
+
+
+class TrendType(str, enum.Enum):
+    VIDEO = "video"
+    AUDIO = "audio"
 
 
 class Trend(Base):
     __tablename__ = "trends"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, nullable=True, comment="Null for global trends")
     platform = Column(String(20), nullable=False)
     keyword = Column(String(200), nullable=False)
+    trend_type = Column(String(20), nullable=False, default=TrendType.VIDEO.value)
     volume = Column(Float, nullable=True, comment="Trend volume / search count")
+    source_url = Column(String(500), nullable=True)
     extracted_at = Column(
         DateTime, nullable=False, default=datetime.utcnow, comment="When data was scraped"
     )
 
     def __repr__(self):
-        return f"<Trend(platform={self.platform}, keyword={self.keyword}, volume={self.volume})>"
+        return f"<Trend(platform={self.platform}, keyword={self.keyword}, type={self.trend_type})>"
+
+
+class AffiliateProduct(Base):
+    __tablename__ = "affiliate_products"
+
+    id = Column(PG_UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id = Column(Integer, nullable=False)
+    platform = Column(String(20), nullable=False)
+    product_url = Column(String(1000), nullable=False)
+    product_name = Column(String(500), nullable=False)
+    price = Column(Float, nullable=True)
+    commission_rate = Column(Float, nullable=True)
+    extracted_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<AffiliateProduct(platform={self.platform}, name={self.product_name})>"
 
 
 class VideoJobStatus(str, enum.Enum):
