@@ -11,6 +11,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from uploader.core.browser_manager import redact_sensitive
+from uploader.core.storage import local_video_file
 from uploader.facebook_uploader.crypto_utils import decrypt_session_data
 from uploader.facebook_uploader.upload_models import UploadJob, UploadJobStatus
 from uploader.shopee_uploader.playwright_engine import (
@@ -81,8 +82,15 @@ def _do_shopee_upload(upload_job_id: str) -> None:
             return
 
         video_row = db.execute(
-            text("SELECT video_url FROM video_jobs WHERE id = :vid"),
-            {"vid": upload_job.video_job_id},
+            text(
+                "SELECT video_url FROM video_jobs "
+                "WHERE id = :vid AND tenant_id = :tenant_id AND user_id = :user_id"
+            ),
+            {
+                "vid": upload_job.video_job_id,
+                "tenant_id": upload_job.tenant_id,
+                "user_id": upload_job.user_id,
+            },
         ).fetchone()
         if not video_row or not video_row[0]:
             raise FileNotFoundError(
@@ -93,9 +101,14 @@ def _do_shopee_upload(upload_job_id: str) -> None:
         account_row = db.execute(
             text(
                 "SELECT session_data, account_name, platform, proxy_url "
-                "FROM accounts WHERE id = :aid"
+                "FROM accounts "
+                "WHERE id = :aid AND tenant_id = :tenant_id AND user_id = :user_id"
             ),
-            {"aid": upload_job.account_id},
+            {
+                "aid": upload_job.account_id,
+                "tenant_id": upload_job.tenant_id,
+                "user_id": upload_job.user_id,
+            },
         ).fetchone()
         if not account_row:
             raise ValueError(f"Account {upload_job.account_id} not found")
@@ -120,12 +133,13 @@ def _do_shopee_upload(upload_job_id: str) -> None:
             account_id=upload_job.account_id,
             proxy_url=proxy_url,
         )
-        post_url = uploader.upload(
-            video_path=video_path,
-            caption=upload_job.caption or "",
-            product_ref=product_ref,
-            upload_job_id=upload_job_id,
-        )
+        with local_video_file(video_path, upload_job.tenant_id) as local_path:
+            post_url = uploader.upload(
+                video_path=local_path,
+                caption=upload_job.caption or "",
+                product_ref=product_ref,
+                upload_job_id=upload_job_id,
+            )
 
         _update_upload_status(
             upload_job_id,

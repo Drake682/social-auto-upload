@@ -53,6 +53,16 @@ class UploadJob(UploadBase):
         nullable=False,
         index=True,
     )
+    user_id = Column(
+        Integer,
+        nullable=False,
+        index=True,
+    )
+    tenant_id = Column(
+        Integer,
+        nullable=False,
+        index=True,
+    )
     caption = Column(
         Text,
         nullable=True,

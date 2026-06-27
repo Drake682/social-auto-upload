@@ -22,6 +22,10 @@ export class User {
   @Column({ type: 'varchar', length: 20, default: UserRole.VIEWER })
   role: UserRole;
 
+  @Column({ type: 'integer', nullable: true })
+  @Index('idx_users_tenant_id')
+  tenant_id: number;
+
   @Column({ type: 'varchar', length: 255, nullable: true })
   license_key: string;
 

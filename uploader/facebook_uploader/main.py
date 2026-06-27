@@ -23,6 +23,7 @@ from uploader.facebook_uploader.upload_models import (
     UploadJobStatus,
 )
 from uploader.core.browser_manager import redact_sensitive
+from uploader.core.storage import local_video_file
 from uploader.facebook_uploader.crypto_utils import decrypt_session_data
 from uploader.facebook_uploader.playwright_engine import (
     FacebookPlaywrightUploader,
@@ -61,6 +62,8 @@ try:
                 "ADD COLUMN IF NOT EXISTS proxy_url VARCHAR(500)"
             )
         )
+        conn.execute(text("ALTER TABLE upload_jobs ADD COLUMN IF NOT EXISTS user_id INTEGER"))
+        conn.execute(text("ALTER TABLE upload_jobs ADD COLUMN IF NOT EXISTS tenant_id INTEGER"))
         conn.execute(
             text(
                 "ALTER TABLE upload_jobs "
@@ -130,10 +133,17 @@ def _do_facebook_upload(upload_job_id: str) -> None:
             logger.error("UploadJob %s not found", upload_job_id)
             return
 
-        # ── Step 2: Get video file path from video_jobs ──
+        # ── Step 2: Get tenant-scoped video file path from video_jobs ──
         row = db.execute(
-            text("SELECT video_url FROM video_jobs WHERE id = :vid"),
-            {"vid": upload_job.video_job_id},
+            text(
+                "SELECT video_url FROM video_jobs "
+                "WHERE id = :vid AND tenant_id = :tenant_id AND user_id = :user_id"
+            ),
+            {
+                "vid": upload_job.video_job_id,
+                "tenant_id": upload_job.tenant_id,
+                "user_id": upload_job.user_id,
+            },
         ).fetchone()
 
         if not row or not row[0]:
@@ -146,9 +156,14 @@ def _do_facebook_upload(upload_job_id: str) -> None:
         acct_row = db.execute(
             text(
                 "SELECT session_data, account_name, platform, proxy_url "
-                "FROM accounts WHERE id = :aid"
+                "FROM accounts "
+                "WHERE id = :aid AND tenant_id = :tenant_id AND user_id = :user_id"
             ),
-            {"aid": upload_job.account_id},
+            {
+                "aid": upload_job.account_id,
+                "tenant_id": upload_job.tenant_id,
+                "user_id": upload_job.user_id,
+            },
         ).fetchone()
 
         if not acct_row:
@@ -178,11 +193,12 @@ def _do_facebook_upload(upload_job_id: str) -> None:
             proxy_url=proxy_url,
             account_id=upload_job.account_id,
         )
-        post_url = uploader.upload(
-            video_path=video_path,
-            caption=upload_job.caption or "",
-            upload_job_id=upload_job_id,
-        )
+        with local_video_file(video_path, upload_job.tenant_id) as local_path:
+            post_url = uploader.upload(
+                video_path=local_path,
+                caption=upload_job.caption or "",
+                upload_job_id=upload_job_id,
+            )
 
         resolved_post_url = post_url or f"https://www.facebook.com/{account_name}"
 
@@ -281,33 +297,53 @@ def upload_facebook():
     """
     data = request.get_json(force=True)
 
+    upload_job_id = data.get("upload_job_id")
     video_job_id = data.get("video_job_id")
     account_id = data.get("account_id")
     caption = data.get("caption", "")
     affiliate_comment = data.get("affiliate_comment")
     proxy_url = data.get("proxy_url")
 
-    if not video_job_id or not account_id:
-        return jsonify({"error": "video_job_id and account_id required"}), 400
-
-    # Create upload job record
     db = SessionLocal()
     try:
-        job = UploadJob(
-            video_job_id=video_job_id,
-            account_id=account_id,
-            caption=caption,
-            proxy_url=proxy_url,
-            affiliate_comment=affiliate_comment,
-            status=UploadJobStatus.PENDING,
-        )
-        db.add(job)
-        db.commit()
-        job_id = str(job.id)
-        logger.info("UploadJob created: %s", job_id)
+        if upload_job_id:
+            job = db.query(UploadJob).filter(UploadJob.id == upload_job_id).first()
+            if not job:
+                return jsonify({"error": "upload_job_id not found"}), 404
+            job_id = str(job.id)
+            logger.info("UploadJob accepted: %s", job_id)
+        else:
+            if not video_job_id or not account_id:
+                return jsonify({"error": "video_job_id and account_id required"}), 400
+            video_row = db.execute(
+                text("SELECT user_id, tenant_id FROM video_jobs WHERE id = :vid"),
+                {"vid": video_job_id},
+            ).fetchone()
+            account_row = db.execute(
+                text("SELECT user_id, tenant_id FROM accounts WHERE id = :aid"),
+                {"aid": account_id},
+            ).fetchone()
+            if not video_row or not account_row:
+                return jsonify({"error": "video_job_id or account_id not found"}), 404
+            if video_row[0] != account_row[0] or video_row[1] != account_row[1]:
+                return jsonify({"error": "video/account tenant mismatch"}), 403
+            job = UploadJob(
+                video_job_id=video_job_id,
+                account_id=account_id,
+                user_id=video_row[0],
+                tenant_id=video_row[1],
+                caption=caption,
+                proxy_url=proxy_url,
+                affiliate_comment=affiliate_comment,
+                status=UploadJobStatus.PENDING,
+            )
+            db.add(job)
+            db.commit()
+            job_id = str(job.id)
+            logger.info("UploadJob created: %s", job_id)
     except Exception as exc:
         db.rollback()
-        logger.error("Failed to create UploadJob: %s", redact_sensitive(exc))
+        logger.error("Failed to prepare UploadJob: %s", redact_sensitive(exc))
         return jsonify({"error": redact_sensitive(exc)}), 500
     finally:
         db.close()
@@ -326,11 +362,20 @@ def upload_facebook():
 @facebook_bp.route("/upload/status/<upload_job_id>", methods=["GET"])
 def upload_status(upload_job_id):
     """Check current status of an upload job."""
+    tenant_id = request.args.get("tenant_id", type=int)
+    user_id = request.args.get("user_id", type=int)
+    if not tenant_id or not user_id:
+        return jsonify({"error": "tenant_id and user_id required"}), 400
+
     db = SessionLocal()
     try:
         job = (
             db.query(UploadJob)
-            .filter(UploadJob.id == upload_job_id)
+            .filter(
+                UploadJob.id == upload_job_id,
+                UploadJob.tenant_id == tenant_id,
+                UploadJob.user_id == user_id,
+            )
             .first()
         )
         if not job:
@@ -340,6 +385,8 @@ def upload_status(upload_job_id):
                 "upload_job_id": str(job.id),
                 "video_job_id": job.video_job_id,
                 "account_id": job.account_id,
+                "user_id": job.user_id,
+                "tenant_id": job.tenant_id,
                 "status": job.status.value,
                 "post_url": job.post_url,
                 "affiliate_comment": job.affiliate_comment,

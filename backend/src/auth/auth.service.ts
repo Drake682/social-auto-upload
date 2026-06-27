@@ -53,6 +53,8 @@ export class AuthService {
     });
 
     const savedUser = await this.userRepository.save(user);
+    savedUser.tenant_id = savedUser.id;
+    await this.userRepository.save(savedUser);
 
     // Auto-login: generate tokens
     const { accessToken, refreshToken } = await this._generateTokens(savedUser);
@@ -215,16 +217,13 @@ export class AuthService {
       },
     );
 
-    // Delete all other refresh tokens for this user (enforce single-session)
+    // Keep the rotated token row so replay detection can revoke all sessions.
     await this.refreshTokenRepository
       .createQueryBuilder()
       .delete()
       .where('user_id = :userId', { userId: user.id })
-      .andWhere('id != :tokenId', { tokenId: savedNewToken.id })
+      .andWhere('id NOT IN (:...ids)', { ids: [savedNewToken.id, tokenEntry.id] })
       .execute();
-
-    // Re-save the new token since we deleted others
-    await this.refreshTokenRepository.save(newTokenEntry);
 
     return {
       user: this._excludePassword(user),
@@ -261,7 +260,7 @@ export class AuthService {
    */
   private async _generateTokens(user: User) {
     const accessToken = this.jwtService.sign(
-      { sub: user.id, email: user.email, role: user.role },
+      { sub: user.id, email: user.email, role: user.role, tenantId: user.tenant_id ?? user.id },
       { secret: JWT_ACCESS_SECRET, expiresIn: ACCESS_TOKEN_EXPIRY },
     );
 
@@ -291,6 +290,7 @@ export class AuthService {
    * Internal: Exclude password from user object using class-transformer
    */
   private _excludePassword(user: User): Partial<User> {
-    return plainToClass(User, user, { excludeExtraneousValues: false });
+    const { password_hash, ...safeUser } = user;
+    return safeUser;
   }
 }

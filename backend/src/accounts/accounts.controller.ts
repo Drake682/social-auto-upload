@@ -28,7 +28,7 @@ export class AccountsController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   async create(@CurrentUser() user: any, @Body() createDto: CreateAccountDto) {
-    const result = await this.accountsService.create(user.sub, createDto);
+    const result = await this.accountsService.create(user.sub, user.tenantId, createDto);
     return { code: 201, data: result, msg: 'Account created' };
   }
 
@@ -38,7 +38,7 @@ export class AccountsController {
    */
   @Get()
   async findAll(@CurrentUser() user: any) {
-    const result = await this.accountsService.findAll(user.sub);
+    const result = await this.accountsService.findAll(user.sub, user.tenantId);
     return { code: 200, data: result, msg: 'Accounts retrieved' };
   }
 
@@ -48,7 +48,7 @@ export class AccountsController {
    */
   @Get(':id')
   async findOne(@CurrentUser() user: any, @Param('id') id: string) {
-    const result = await this.accountsService.findOne(user.sub, parseInt(id));
+    const result = await this.accountsService.findOne(user.sub, user.tenantId, parseInt(id));
     return { code: 200, data: result, msg: 'Account retrieved' };
   }
 
@@ -61,20 +61,20 @@ export class AccountsController {
     @Param('id') id: string,
     @Body() updateDto: Partial<CreateAccountDto>,
   ) {
-    const result = await this.accountsService.update(user.sub, parseInt(id), updateDto);
+    const result = await this.accountsService.update(user.sub, user.tenantId, parseInt(id), updateDto);
     return { code: 200, data: result, msg: 'Account updated' };
   }
 
   /**
    * PATCH /accounts/:id/status — Update account health status.
-   * Internal API — used by health check workers.
    */
   @Patch(':id/status')
   async updateStatus(
+    @CurrentUser() user: any,
     @Param('id') id: string,
     @Body() statusDto: UpdateAccountStatusDto,
   ) {
-    const result = await this.accountsService.updateStatus(parseInt(id), statusDto.status);
+    const result = await this.accountsService.updateStatus(user.sub, user.tenantId, parseInt(id), statusDto.status);
     return { code: 200, data: result, msg: 'Status updated' };
   }
 
@@ -85,6 +85,6 @@ export class AccountsController {
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
   async remove(@CurrentUser() user: any, @Param('id') id: string) {
-    return this.accountsService.remove(user.sub, parseInt(id));
+    return this.accountsService.remove(user.sub, user.tenantId, parseInt(id));
   }
 }

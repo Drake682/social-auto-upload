@@ -1,4 +1,4 @@
-import { IsEnum, IsOptional, IsString, IsUrl, MaxLength } from 'class-validator';
+import { IsEnum, IsObject, IsOptional, IsString, IsUrl, MaxLength } from 'class-validator';
 import { Platform } from '../enums/platform.enum';
 
 export class CreateAccountDto {
@@ -13,6 +13,7 @@ export class CreateAccountDto {
    * Accept raw session_data as any JSON-serializable object.
    * The service will stringify and encrypt before storing.
    */
+  @IsObject()
   session_data: Record<string, any>;
 
   @IsOptional()

@@ -4,7 +4,8 @@ Matches the eventual TypeORM entity in NestJS for shared DB access.
 """
 
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Float, Text, DateTime, Enum as SAEnum
+from sqlalchemy import Column, Integer, String, Float, Text, DateTime
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase
 import enum
 
@@ -23,10 +24,7 @@ class Trend(Base):
     __tablename__ = "trends"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    platform = Column(
-        SAEnum(TrendPlatform, name="trend_platform_enum", create_type=False),
-        nullable=False,
-    )
+    platform = Column(String(20), nullable=False)
     keyword = Column(String(200), nullable=False)
     volume = Column(Float, nullable=True, comment="Trend volume / search count")
     extracted_at = Column(
@@ -49,15 +47,14 @@ class VideoJobStatus(str, enum.Enum):
 class VideoJob(Base):
     __tablename__ = "video_jobs"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    job_id = Column(String(100), unique=True, nullable=False, index=True)
+    id = Column(PG_UUID(as_uuid=False), primary_key=True)
+    user_id = Column(Integer, nullable=False)
+    tenant_id = Column(Integer, nullable=False)
     topic = Column(String(500), nullable=False)
-    status = Column(
-        SAEnum(VideoJobStatus, name="video_job_status_enum", create_type=False),
-        nullable=False,
-        default=VideoJobStatus.PENDING,
-    )
+    status = Column(String(30), nullable=False, default=VideoJobStatus.PENDING.value)
+    progress = Column(Integer, nullable=True)
     script = Column(Text, nullable=True, comment="Generated narration script")
+    source_s3_uri = Column(String(500), nullable=True, comment="Source media S3 URI")
     audio_url = Column(String(500), nullable=True, comment="Path to TTS audio file")
     video_url = Column(String(500), nullable=True, comment="Path to final rendered video")
     error_log = Column(Text, nullable=True, comment="Error details if status=failed")
@@ -67,4 +64,4 @@ class VideoJob(Base):
     )
 
     def __repr__(self):
-        return f"<VideoJob(job_id={self.job_id}, status={self.status})>"
+        return f"<VideoJob(id={self.id}, status={self.status})>"

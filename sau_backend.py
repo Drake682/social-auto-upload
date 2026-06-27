@@ -14,6 +14,8 @@ from conf import BASE_DIR
 from myUtils.login import get_tencent_cookie, douyin_cookie_gen, get_ks_cookie, xiaohongshu_cookie_gen
 from myUtils.postVideo import post_video_tencent, post_video_DouYin, post_video_ks, post_video_xhs
 from uploader.facebook_uploader.main import facebook_bp
+from uploader.tiktok_uploader.main import tiktok_bp
+from uploader.shopee_uploader.main import shopee_bp
 
 active_queues = {}
 app = Flask(__name__)
@@ -21,8 +23,10 @@ app = Flask(__name__)
 #允许所有来源跨域访问
 CORS(app)
 
-# Register Phase 5 Upload Engine blueprint
+# Register upload engine blueprints
 app.register_blueprint(facebook_bp)
+app.register_blueprint(tiktok_bp)
+app.register_blueprint(shopee_bp)
 
 @app.route('/health')
 def health():

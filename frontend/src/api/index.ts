@@ -6,7 +6,7 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 class ApiService {
   private axiosInstance: AxiosInstance;
   private refreshTokenPromise: Promise<string> | null = null;
-  private requestQueue: Array<() => void> = [];
+  private requestQueue: Array<{ resolve: (value: unknown) => void; reject: (reason?: unknown) => void; config: any }> = [];
 
   constructor() {
     this.axiosInstance = axios.create({
@@ -50,28 +50,33 @@ class ApiService {
         if (error.response?.status === 401 && authStore.refreshToken && config) {
           // Queue this failed request; it will be retried after refresh
           return new Promise((resolve, reject) => {
-            this.requestQueue.push(() => {
-              this.axiosInstance(config)
-                .then(resolve)
-                .catch(reject);
-            });
+            this.requestQueue.push({ resolve, reject, config });
 
             // If no refresh is in progress, start one
             if (!this.refreshTokenPromise) {
               this.refreshTokenPromise = this.performTokenRefresh()
-                .then(() => {
+                .then((accessToken) => {
                   // Token refreshed — drain the queue
-                  this.requestQueue.forEach((callback) => callback());
+                  const queue = this.requestQueue;
                   this.requestQueue = [];
-                  this.refreshTokenPromise = null;
+                  queue.forEach((queuedRequest) => {
+                    queuedRequest.config.headers.Authorization = `Bearer ${accessToken}`;
+                    this.axiosInstance(queuedRequest.config)
+                      .then(queuedRequest.resolve)
+                      .catch(queuedRequest.reject);
+                  });
+                  return accessToken;
                 })
                 .catch((refreshError) => {
-                  // Refresh failed — clear auth state
+                  // Refresh failed — clear auth state and reject the queued requests
                   authStore.clearAuth();
+                  const queue = this.requestQueue;
                   this.requestQueue = [];
+                  queue.forEach((queuedRequest) => queuedRequest.reject(refreshError));
+                  throw refreshError;
+                })
+                .finally(() => {
                   this.refreshTokenPromise = null;
-                  // Redirect handled by router guard on next navigation
-                  return Promise.reject(refreshError);
                 });
             }
           });

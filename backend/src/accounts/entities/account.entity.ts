@@ -15,6 +15,8 @@ import { AccountStatus } from '../enums/account-status.enum';
 
 @Entity('accounts')
 @Index('idx_accounts_user_id', ['user_id'])
+@Index('idx_accounts_tenant_user', ['tenant_id', 'user_id'])
+@Index('idx_accounts_tenant_id_id', ['tenant_id', 'id'])
 @Index('idx_accounts_platform', ['platform'])
 @Index('idx_accounts_status', ['status'])
 export class Account {
@@ -24,6 +26,9 @@ export class Account {
   @Column({ type: 'integer' })
   @Index('idx_accounts_user_fk')
   user_id: number;
+
+  @Column({ type: 'integer' })
+  tenant_id: number;
 
   @ManyToOne(() => User, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
