@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD:-socialflow_dev}
       POSTGRES_DB: ${DB_NAME:-socialflow}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -22,7 +22,7 @@ services:
     container_name: socialflow-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -40,8 +40,8 @@ services:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY:-socialflow}
       MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-socialflow_minio_dev}
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio_data:/data
     healthcheck:
@@ -97,7 +97,7 @@ services:
       S3_FORCE_PATH_STYLE: "true"
     command: npm run start:dev
     ports:
-      - "3000:3000"
+      - "${BACKEND_PORT:-3000}:3000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -149,7 +149,7 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY:-socialflow_minio_dev}
       S3_FORCE_PATH_STYLE: "true"
     ports:
-      - "8001:8001"
+      - "${AI_WORKER_PORT:-8001}:8001"
     depends_on:
       postgres:
         condition: service_healthy
@@ -169,8 +169,10 @@ services:
       dockerfile: Dockerfile.flask
     container_name: socialflow-flask-uploader
     restart: unless-stopped
+    entrypoint: ["/app/uploader/entrypoint.sh"]
     environment:
       FLASK_PORT: 5000
+      DISPLAY: :99
       DB_HOST: postgres
       DB_PORT: 5432
       DB_USER: ${DB_USER:-socialflow}
@@ -181,7 +183,12 @@ services:
       REDIS_PORT: 6379
       REDIS_URL: redis://redis:6379
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-dev_encryption_key_change_in_prod}
-      FB_HEADLESS: ${FB_HEADLESS:-1}
+      NESTJS_WEBHOOK_URL: http://host.docker.internal:3000/v1/webhooks/uploader
+      PROXY_GATEWAY_URL: ${PROXY_GATEWAY_URL:-}
+      PROXY_GATEWAY_KEY: ${PROXY_GATEWAY_KEY:-}
+      PROXY_GATEWAY_TIMEOUT_SECONDS: ${PROXY_GATEWAY_TIMEOUT_SECONDS:-10}
+      UPLOADER_MAX_DISPATCH_THREADS: ${UPLOADER_MAX_DISPATCH_THREADS:-3}
+      FB_HEADLESS: "0"
       FB_UPLOAD_TIMEOUT_MS: ${FB_UPLOAD_TIMEOUT_MS:-300000}
       FB_ACTION_TIMEOUT_MS: ${FB_ACTION_TIMEOUT_MS:-30000}
       TIKTOK_HEADLESS: ${TIKTOK_HEADLESS:-1}
@@ -204,7 +211,8 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY:-socialflow_minio_dev}
       S3_FORCE_PATH_STYLE: "true"
     ports:
-      - "5000:5000"
+      - "${FLASK_PORT:-5000}:5000"
+      - "${NOVNC_PORT:-18080}:8080"
     volumes:
       - flask_error_logs:/app/error_logs
       - flask_video_files:/app/videoFile
@@ -216,6 +224,8 @@ services:
         condition: service_healthy
       minio-createbucket:
         condition: service_completed_successfully
+      nestjs_backend:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=3)\""]
       interval: 15s
