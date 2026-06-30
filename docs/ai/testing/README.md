@@ -17,10 +17,11 @@ description: Define testing approach, test cases, and quality assurance
 ## Unit Tests
 **What individual components need testing?**
 
-### Component/Module 1
-- [ ] Test case 1: [Description] (covers scenario / branch)
-- [ ] Test case 2: [Description] (covers edge case / error handling)
-- [ ] Additional coverage: [Description]
+### Phase 0 Task 2 — Backend HealthModule
+- [x] `backend/src/health/health.module.spec.ts` verifies `GET /health` returns top-level `{ status, timestamp }`.
+- [x] Health timestamp must be valid ISO string via `new Date(timestamp).toISOString()`.
+- [x] Full backend unit suite passes with `npm test -- --runInBand`.
+- [x] Backend build passes with `npm run build`.
 
 ### Component/Module 2
 - [ ] Test case 1: [Description]
