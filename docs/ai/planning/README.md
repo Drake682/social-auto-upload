@@ -33,9 +33,14 @@ description: Break down work into actionable tasks and estimate timeline
 - [x] Task 6: Frontend filter + pagination + ImportBulkDialog + real health ping
 - [x] Task 7: Docs + regression
 
-### Phase 3: Integration & Polish
-- [ ] Task 3.1: [Description]
-- [ ] Task 3.2: [Description]
+### Phase 3: Trend Engine
+- [x] Task 1: Trend schema migration + backend entity alignment
+- [x] Task 2: Backend DTO + TrendsService + GET /trends/latest controller
+- [x] Task 3: AI worker TikTok Creative Center + Facebook VN scraper modules
+- [x] Task 4: AI worker scheduler, protected `/trends/sync`, run_id batch dedupe/upsert
+- [x] Task 5: TrendService unit tests for filters, tenant scope, limit, legacy fallback
+- [x] Task 6: Frontend Trends filters + top-10 view count cards
+- [x] Task 7: Docs + regression verification
 
 ## Dependencies
 **What needs to happen in what order?**

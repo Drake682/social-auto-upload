@@ -34,12 +34,17 @@ class Trend(Base):
     tenant_id = Column(Integer, nullable=True, comment="Null for global trends")
     platform = Column(String(20), nullable=False)
     keyword = Column(String(200), nullable=False)
+    title = Column(String(500), nullable=True)
     trend_type = Column(String(20), nullable=False, default=TrendType.VIDEO.value)
-    volume = Column(Float, nullable=True, comment="Trend volume / search count")
+    volume = Column(Float, nullable=True, comment="Legacy trend volume / search count")
+    views = Column(Float, nullable=True, comment="View count from trend provider")
+    region = Column(String(100), nullable=True, default="global")
+    run_id = Column(PG_UUID(as_uuid=False), nullable=True)
     source_url = Column(String(500), nullable=True)
     extracted_at = Column(
         DateTime, nullable=False, default=datetime.utcnow, comment="When data was scraped"
     )
+    crawled_at = Column(DateTime, nullable=True)
 
     def __repr__(self):
         return f"<Trend(platform={self.platform}, keyword={self.keyword}, type={self.trend_type})>"

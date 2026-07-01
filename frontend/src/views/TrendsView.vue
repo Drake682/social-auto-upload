@@ -1,137 +1,160 @@
 <template>
   <div class="trends-page">
-    <!-- Header -->
     <div class="page-header">
       <div>
         <h1>🔥 Trend Engine</h1>
-        <p class="subtitle">Latest trending keywords across platforms — updated every 2 hours</p>
+        <p class="subtitle">Top 10 platform trends with view count — updated every 2 hours</p>
       </div>
       <button class="btn-refresh" @click="handleRefresh" :disabled="store.isLoading">
         {{ store.isLoading ? 'Refreshing...' : '🔄 Refresh' }}
       </button>
     </div>
 
-    <!-- Error -->
     <div v-if="store.error" class="error-banner">
       {{ store.error }}
     </div>
 
-    <!-- Loading -->
+    <div class="filters-card">
+      <div class="filter-group">
+        <label for="platform-filter">Platform</label>
+        <select id="platform-filter" :value="store.platformFilter" @change="handlePlatformFilter">
+          <option value="tiktok">TikTok</option>
+          <option value="facebook">Facebook</option>
+          <option value="youtube">YouTube</option>
+          <option value="instagram">Instagram</option>
+          <option value="shopee">Shopee</option>
+        </select>
+      </div>
+
+      <div class="filter-group">
+        <label for="region-filter">Region</label>
+        <select id="region-filter" :value="store.regionFilter" @change="handleRegionFilter">
+          <option value="vn">Vietnam</option>
+          <option value="global">Global</option>
+          <option value="us">United States</option>
+          <option value="uk">United Kingdom</option>
+        </select>
+      </div>
+    </div>
+
     <div v-if="store.isLoading && store.trends.length === 0" class="loading-state">
       <div class="spinner"></div>
       <p>Loading trends...</p>
     </div>
 
-    <!-- Platform Tabs -->
-    <div v-if="store.trends.length > 0" class="tabs">
-      <button
-        v-for="(group, idx) in store.trends"
-        :key="group.platform"
-        class="tab"
-        :class="{ 'tab--active': activeTab === idx, [`tab-${group.platform}`]: true }"
-        @click="activeTab = idx"
-      >
-        {{ platformLabel(group.platform) }}
-        <span class="tab-count">{{ group.trends.length }}</span>
-      </button>
+    <div v-if="store.trends.length > 0" class="trend-summary">
+      <span class="platform-badge" :class="`platform-${store.platformFilter}`">
+        {{ platformLabel(store.platformFilter) }}
+      </span>
+      <span>Top {{ store.trends.length }} · {{ regionLabel(store.regionFilter) }}</span>
     </div>
 
-    <!-- Trend Grid -->
-    <div v-if="activeGroup" class="trend-grid">
+    <div v-if="store.trends.length > 0" class="trend-grid">
       <div
-        v-for="trend in activeGroup.trends"
+        v-for="(trend, index) in store.trends"
         :key="trend.id"
         class="trend-card"
-        :class="{ 'trend-card--hot': trend.volume >= 800000 }"
+        :class="{ 'trend-card--hot': trend.views >= 800000 }"
       >
-        <div class="trend-rank" :class="getRankClass(trend, activeGroup)">
-          #{{ getRank(trend, activeGroup) }}
-        </div>
+        <div class="trend-rank" :class="getRankClass(index)">#{{ index + 1 }}</div>
         <div class="trend-info">
-          <div class="trend-keyword">
-            {{ trend.keyword }}
-            <span v-if="trend.volume >= 800000" class="hot-badge">HOT</span>
+          <div class="trend-title">
+            {{ trend.title }}
+            <span v-if="trend.views >= 800000" class="hot-badge">HOT</span>
           </div>
-          <div class="trend-volume">
-            {{ formatVolume(trend.volume) }} searches
+          <div class="trend-meta">
+            <span>{{ formatViews(trend.views) }} views</span>
+            <span>·</span>
+            <span>{{ regionLabel(trend.region) }}</span>
+            <span>·</span>
+            <span>{{ formatDate(trend.crawled_at) }}</span>
           </div>
         </div>
         <div class="trend-bar">
           <div
             class="trend-bar-fill"
-            :class="`bar-${activeGroup.platform}`"
-            :style="{ width: barWidth(trend, activeGroup) + '%' }"
+            :class="`bar-${trend.platform}`"
+            :style="{ width: barWidth(trend.views) + '%' }"
           ></div>
         </div>
       </div>
     </div>
 
-    <!-- Empty state -->
     <div v-if="!store.isLoading && store.trends.length === 0 && !store.error" class="empty-state">
       <div class="empty-icon">📊</div>
       <p>No trend data yet</p>
-      <p class="empty-hint">The AI Worker collects trends every 2 hours. Check back soon!</p>
+      <p class="empty-hint">Try another platform/region or wait for next AI Worker crawl.</p>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
-import { useTrendStore, type GroupedTrend, type TrendItem } from '@/stores/trend.store';
+import { computed, onMounted } from 'vue';
+import { useTrendStore, type TrendPlatform, type TrendRegion } from '@/stores/trend.store';
 
 const store = useTrendStore();
 
-const activeTab = ref(0);
+const maxViews = computed(() => Math.max(...store.trends.map((trend) => trend.views), 1));
 
-const activeGroup = computed<GroupedTrend | null>(() => {
-  if (store.trends.length === 0) return null;
-  return store.trends[activeTab.value] || null;
-});
-
-// Platform display
 function platformLabel(platform: string): string {
   const labels: Record<string, string> = {
     tiktok: 'TikTok',
     facebook: 'Facebook',
     youtube: 'YouTube',
+    instagram: 'Instagram',
+    shopee: 'Shopee',
   };
   return labels[platform] || platform;
 }
 
-// Volume formatting
-function formatVolume(volume: number): string {
-  if (volume >= 1_000_000) return (volume / 1_000_000).toFixed(1) + 'M';
-  if (volume >= 1_000) return (volume / 1_000).toFixed(1) + 'K';
-  return volume.toString();
+function regionLabel(region: string): string {
+  const labels: Record<string, string> = {
+    vn: 'Vietnam',
+    global: 'Global',
+    us: 'United States',
+    uk: 'United Kingdom',
+  };
+  return labels[region] || region.toUpperCase();
 }
 
-// Rank within platform group
-function getRank(trend: TrendItem, group: GroupedTrend): number {
-  return group.trends.findIndex((t) => t.id === trend.id) + 1;
+function formatViews(views: number): string {
+  if (views >= 1_000_000) return (views / 1_000_000).toFixed(1) + 'M';
+  if (views >= 1_000) return (views / 1_000).toFixed(1) + 'K';
+  return views.toString();
 }
 
-function getRankClass(trend: TrendItem, group: GroupedTrend): string {
-  const rank = getRank(trend, group);
-  if (rank === 1) return 'rank-1';
-  if (rank === 2) return 'rank-2';
-  if (rank === 3) return 'rank-3';
+function formatDate(value: string): string {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleString();
+}
+
+function getRankClass(index: number): string {
+  if (index === 0) return 'rank-1';
+  if (index === 1) return 'rank-2';
+  if (index === 2) return 'rank-3';
   return '';
 }
 
-// Bar width relative to max volume in group
-function barWidth(trend: TrendItem, group: GroupedTrend): number {
-  const maxVol = group.trends[0]?.volume || 1;
-  return Math.round((trend.volume / maxVol) * 100);
+function barWidth(views: number): number {
+  return Math.max(4, Math.round((views / maxViews.value) * 100));
 }
 
-// Refresh
 async function handleRefresh() {
   await store.fetchLatestTrends();
 }
 
-// Initial load
+function handlePlatformFilter(event: Event) {
+  store.setPlatformFilter((event.target as HTMLSelectElement).value as TrendPlatform);
+}
+
+function handleRegionFilter(event: Event) {
+  store.setRegionFilter((event.target as HTMLSelectElement).value as TrendRegion);
+}
+
 onMounted(() => {
-  store.fetchLatestTrends();
+  store.fetchLatestTrends({ limit: 10 });
 });
 </script>
 
@@ -141,7 +164,6 @@ onMounted(() => {
   margin: 0 auto;
 }
 
-/* Header */
 .page-header {
   display: flex;
   justify-content: space-between;
@@ -184,7 +206,6 @@ onMounted(() => {
   cursor: not-allowed;
 }
 
-/* Error */
 .error-banner {
   background: rgba(239, 68, 68, 0.08);
   border: 1px solid rgba(239, 68, 68, 0.2);
@@ -195,7 +216,41 @@ onMounted(() => {
   font-size: 13px;
 }
 
-/* Loading */
+.filters-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: rgba(30, 41, 59, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.08);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+
+.filter-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.filter-group label {
+  color: #cbd5e1;
+  font-size: 13px;
+}
+
+.filter-group select {
+  padding: 8px 12px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 8px;
+  color: #f1f5f9;
+}
+
+.filter-group select option {
+  background: #1e293b;
+  color: #f1f5f9;
+}
+
 .loading-state {
   text-align: center;
   padding: 60px 20px;
@@ -216,51 +271,29 @@ onMounted(() => {
   to { transform: rotate(360deg); }
 }
 
-/* Platform Tabs */
-.tabs {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 24px;
-}
-
-.tab {
+.trend-summary {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 20px;
-  background: rgba(30, 41, 59, 0.5);
-  border: 1px solid rgba(148, 163, 184, 0.08);
-  border-radius: 10px;
+  gap: 10px;
   color: #94a3b8;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.15s;
+  font-size: 13px;
+  margin-bottom: 16px;
 }
 
-.tab:hover {
-  color: #e2e8f0;
-  background: rgba(30, 41, 59, 0.8);
-}
-
-.tab--active {
-  color: #fff;
-  border-color: rgba(148, 163, 184, 0.15);
-  background: rgba(30, 41, 59, 0.9);
-}
-
-.tab--active.tab-tiktok   { border-color: rgba(255, 255, 255, 0.25); box-shadow: 0 0 15px rgba(255,255,255,0.05); }
-.tab--active.tab-facebook { border-color: rgba(24, 119, 242, 0.4);  box-shadow: 0 0 15px rgba(24,119,242,0.1); }
-.tab--active.tab-youtube  { border-color: rgba(255, 0, 0, 0.4);    box-shadow: 0 0 15px rgba(255,0,0,0.1); }
-
-.tab-count {
+.platform-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 6px;
   font-size: 12px;
-  padding: 2px 8px;
-  background: rgba(148, 163, 184, 0.1);
-  border-radius: 10px;
+  font-weight: 600;
 }
 
-/* Trend Grid */
+.platform-tiktok { background: rgba(0, 0, 0, 0.4); color: #fff; border: 1px solid rgba(255, 255, 255, 0.2); }
+.platform-facebook { background: rgba(24, 119, 242, 0.15); color: #1877F2; border: 1px solid rgba(24, 119, 242, 0.3); }
+.platform-youtube { background: rgba(255, 0, 0, 0.1); color: #FF0000; border: 1px solid rgba(255, 0, 0, 0.25); }
+.platform-instagram { background: rgba(225, 48, 108, 0.12); color: #E1306C; border: 1px solid rgba(225, 48, 108, 0.3); }
+.platform-shopee { background: rgba(238, 77, 45, 0.12); color: #EE4D2D; border: 1px solid rgba(238, 77, 45, 0.3); }
+
 .trend-grid {
   display: grid;
   gap: 12px;
@@ -287,7 +320,6 @@ onMounted(() => {
   background: rgba(30, 41, 59, 0.6);
 }
 
-/* Rank */
 .trend-rank {
   font-size: 14px;
   font-weight: 700;
@@ -301,20 +333,19 @@ onMounted(() => {
 .rank-2 { color: #94a3b8; }
 .rank-3 { color: #d97706; }
 
-/* Trend info */
 .trend-info {
   flex: 1;
   min-width: 0;
 }
 
-.trend-keyword {
+.trend-title {
   color: #e2e8f0;
   font-size: 15px;
   font-weight: 600;
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 4px;
+  margin-bottom: 5px;
 }
 
 .hot-badge {
@@ -325,20 +356,16 @@ onMounted(() => {
   font-weight: 700;
   border-radius: 4px;
   letter-spacing: 0.5px;
-  animation: pulse 2s ease-in-out infinite;
 }
 
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.7; }
-}
-
-.trend-volume {
+.trend-meta {
   color: #64748b;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
   font-size: 13px;
 }
 
-/* Trend bar */
 .trend-bar {
   width: 120px;
   height: 6px;
@@ -354,11 +381,12 @@ onMounted(() => {
   transition: width 0.5s ease;
 }
 
-.bar-tiktok   { background: linear-gradient(90deg, #fff, #94a3b8); }
+.bar-tiktok { background: linear-gradient(90deg, #fff, #94a3b8); }
 .bar-facebook { background: linear-gradient(90deg, #1877F2, #60a5fa); }
-.bar-youtube  { background: linear-gradient(90deg, #FF0000, #f87171); }
+.bar-youtube { background: linear-gradient(90deg, #FF0000, #f87171); }
+.bar-instagram { background: linear-gradient(90deg, #E1306C, #f472b6); }
+.bar-shopee { background: linear-gradient(90deg, #EE4D2D, #fb923c); }
 
-/* Empty */
 .empty-state {
   text-align: center;
   padding: 60px 20px;
@@ -378,5 +406,23 @@ onMounted(() => {
 .empty-hint {
   font-size: 13px !important;
   color: #64748b !important;
+}
+
+@media (max-width: 720px) {
+  .page-header,
+  .filters-card,
+  .trend-card {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .filter-group {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .trend-bar {
+    width: 100%;
+  }
 }
 </style>

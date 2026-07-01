@@ -55,6 +55,15 @@ description: Define testing approach, test cases, and quality assurance
 - [x] AccountsService tests cover platform filter + pagination, tenant-scoped soft delete, JSON/CSV bulk import, partial failure reports, and health ping alive/dead/unconfigured/failure paths.
 - [x] `frontend` production build verifies Accounts table, platform filter, pagination, bulk import dialog, and real health ping wiring compile cleanly.
 
+### Phase 3 — Trend Engine
+- [x] `backend/src/trends/trends.service.spec.ts` verifies platform filter returns only matching rows.
+- [x] `backend/src/trends/trends.service.spec.ts` verifies region filter returns only matching rows.
+- [x] `backend/src/trends/trends.service.spec.ts` verifies `limit=10` caps results.
+- [x] `backend/src/trends/trends.service.spec.ts` verifies tenant-scoped latest query includes tenant rows plus global rows and excludes other tenants.
+- [x] `backend/src/trends/trends.service.spec.ts` verifies legacy fallback from `title` to `keyword`, `views` to `volume`, nullable `region` to `global`, and `crawled_at` to `extracted_at`.
+- [x] `frontend` production build verifies Trends platform/region filters and top-10 cards compile cleanly.
+- [x] AI worker `py_compile` verifies `main.py`, `models.py`, and trend scraper modules are syntax-clean on Python 3.11.
+
 ## Integration Tests
 **How do we test component interactions?**
 

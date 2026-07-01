@@ -1,5 +1,6 @@
-import { Controller, Get, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, UseGuards, HttpCode, HttpStatus, Query } from '@nestjs/common';
 import { TrendsService } from './trends.service';
+import { LatestTrendsQueryDto } from './dto/latest-trends-query.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 
@@ -9,18 +10,17 @@ export class TrendsController {
   constructor(private readonly trendsService: TrendsService) {}
 
   /**
-   * GET /trends/latest
-   * Returns trends grouped by platform — top 10 per platform
-   * from the most recent crawl batch.
+   * GET /trends/latest?platform=tiktok&limit=10&region=vn
+   * Returns a flat filtered list for the Trend Engine dashboard.
    */
   @Get('latest')
   @HttpCode(HttpStatus.OK)
-  async getLatest(@CurrentUser() user: any) {
-    const data = await this.trendsService.getLatest(user.tenantId);
+  async getLatest(@CurrentUser() user: any, @Query() query: LatestTrendsQueryDto) {
+    const data = await this.trendsService.getLatest(user.tenantId, query);
     return {
       code: 200,
       data,
-      msg: 'Latest trends retrieved',
+      msg: 'ok',
     };
   }
 }

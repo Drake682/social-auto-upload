@@ -2,15 +2,15 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Trend } from './entities/trend.entity';
+import { LatestTrendsQueryDto } from './dto/latest-trends-query.dto';
 
-export interface GroupedTrends {
+export interface LatestTrendResponse {
+  id: number;
+  title: string;
+  views: number;
   platform: string;
-  trends: Array<{
-    id: number;
-    keyword: string;
-    volume: number;
-    extracted_at: Date;
-  }>;
+  region: string;
+  crawled_at: Date;
 }
 
 @Injectable()
@@ -20,62 +20,35 @@ export class TrendsService {
     private readonly trendRepository: Repository<Trend>,
   ) {}
 
-  /**
-   * Get the latest trends grouped by platform.
-   * For each platform, returns the top 10 keywords by volume
-   * from the most recent crawl batch.
-   */
-  async getLatest(tenantId: number): Promise<GroupedTrends[]> {
-    // Find the latest tenant-visible extraction timestamp.
-    const latestRun = await this.trendRepository
+  async getLatest(tenantId: number, query: LatestTrendsQueryDto = new LatestTrendsQueryDto()): Promise<LatestTrendResponse[]> {
+    const platform = query.platform || 'tiktok';
+    const region = query.region || 'vn';
+    const limit = query.limit ?? 10;
+
+    const rows = await this.trendRepository
       .createQueryBuilder('trend')
-      .where('trend.tenant_id = :tenantId OR trend.tenant_id IS NULL', { tenantId })
-      .orderBy('trend.extracted_at', 'DESC')
-      .getOne();
-
-    if (!latestRun) {
-      return [];
-    }
-
-    // Get all trends from the latest extraction window (±1 second tolerance)
-    const latestTime = latestRun.extracted_at;
-    const windowStart = new Date(latestTime.getTime() - 1000);
-    const windowEnd = new Date(latestTime.getTime() + 1000);
-
-    const allLatest = await this.trendRepository
-      .createQueryBuilder('trend')
-      .where('trend.tenant_id = :tenantId OR trend.tenant_id IS NULL', { tenantId })
-      .andWhere('trend.extracted_at BETWEEN :windowStart AND :windowEnd', { windowStart, windowEnd })
-      .orderBy('trend.volume', 'DESC')
+      .where('(trend.tenant_id = :tenantId OR trend.tenant_id IS NULL)', { tenantId })
+      .andWhere('trend.platform = :platform', { platform })
+      .andWhere('(trend.region = :region OR (trend.region IS NULL AND :region = :globalRegion))', {
+        region,
+        globalRegion: 'global',
+      })
+      .orderBy('COALESCE(trend.crawled_at, trend.extracted_at)', 'DESC')
+      .addOrderBy('COALESCE(trend.views, trend.volume)', 'DESC')
+      .limit(limit)
       .getMany();
 
-    const latestBatch = allLatest;
+    return rows.map((trend) => this.toLatestTrend(trend));
+  }
 
-    // Group by platform, take top 10 per platform
-    const platformMap = new Map<string, Trend[]>();
-
-    for (const trend of latestBatch) {
-      const existing = platformMap.get(trend.platform) || [];
-      if (existing.length < 10) {
-        existing.push(trend);
-        platformMap.set(trend.platform, existing);
-      }
-    }
-
-    // Build response
-    const result: GroupedTrends[] = [];
-    for (const [platform, trends] of platformMap) {
-      result.push({
-        platform,
-        trends: trends.map((t) => ({
-          id: t.id,
-          keyword: t.keyword,
-          volume: t.volume,
-          extracted_at: t.extracted_at,
-        })),
-      });
-    }
-
-    return result;
+  private toLatestTrend(trend: Trend): LatestTrendResponse {
+    return {
+      id: trend.id,
+      title: trend.title || trend.keyword,
+      views: trend.views ?? trend.volume ?? 0,
+      platform: trend.platform,
+      region: trend.region || 'global',
+      crawled_at: trend.crawled_at || trend.extracted_at,
+    };
   }
 }

@@ -34,6 +34,10 @@ description: Technical implementation notes, patterns, and code guidelines
 - Phase 2 implements Account Manager CRM with tenant-scoped CRUD, `tiktok_vn`/`tiktok_us` plus legacy `tiktok`, soft delete, filter/pagination, JSON/CSV bulk import, uploader-backed health ping, and 6-hour scheduled health checks.
 - Account cookies/session data are encrypted with AES-256-GCM using `COOKIE_ENCRYPTION_KEY` preferred and `ENCRYPTION_KEY` fallback; API responses strip `session_data` and health logs include summary counts only.
 - Frontend Accounts page supports platform filtering, pagination, bulk import dialog, health badges, and real `GET /accounts/:id/health` checks.
+- Phase 3 Trend Engine stores trend batches with `title`, `views`, `region`, `crawled_at`, and `run_id` while preserving legacy `keyword`, `volume`, and `extracted_at` fallbacks.
+- `GET /trends/latest?platform=tiktok&limit=10&region=vn` returns a flat tenant-scoped list including global rows (`tenant_id IS NULL`) and normalizes legacy null `title`/`views` from `keyword`/`volume`.
+- AI worker trend sync uses APScheduler with `TREND_INTERVAL_MINUTES=120`, skips missing provider credentials with warning logs, protects manual `/trends/sync` calls with Bearer `WORKER_SECRET`, prevents overlapping sync runs with a process lock, and upserts trend rows on `(COALESCE(tenant_id, 0), platform, region, run_id, keyword)`.
+- Frontend Trends page calls `/trends/latest` with platform/region filters and renders top-10 cards with title, view count, region, and crawl time.
 
 ### Patterns & Best Practices
 - Auth token responses are normalized in `AuthService._tokenResponse()` to prevent endpoint-specific response drift.

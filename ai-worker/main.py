@@ -6,15 +6,20 @@ FastAPI server + APScheduler for periodic trend data collection.
 import asyncio
 import logging
 import os
+import secrets
 import tempfile
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime
+from uuid import uuid4
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sqlalchemy import func, literal_column
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 
 from database import engine, SessionLocal
 from models import AffiliateProduct, Base, Trend, TrendType, VideoJob, VideoJobStatus
@@ -24,6 +29,7 @@ from video_engine import VideoNormalizer
 
 # Environment
 TREND_INTERVAL_MINUTES = int(os.getenv("TREND_INTERVAL_MINUTES", "120"))
+WORKER_SECRET = os.getenv("WORKER_SECRET", "")
 STOCK_VIDEO = os.getenv("STOCK_VIDEO_PATH", "./assets/stock_background.mp4")
 CORS_ORIGINS = [
     origin.strip()
@@ -38,13 +44,26 @@ logger = logging.getLogger(__name__)
 Base.metadata.create_all(bind=engine)
 logger.info("AI Worker tables ensured in database")
 
+_trend_sync_lock = threading.Lock()
+
+
+def _verify_worker_secret(authorization: str | None) -> None:
+    if not WORKER_SECRET:
+        logger.warning("WORKER_SECRET is not configured; rejecting protected worker request")
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token or not secrets.compare_digest(token, WORKER_SECRET):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
 
 # --- Data Mining Engine ---
-def _persist_trends(items: list[dict], tenant_id: int | None = None) -> int:
+def _persist_trends(items: list[dict], tenant_id: int | None = None, run_id: str | None = None) -> int:
     db = SessionLocal()
     try:
         count = 0
         now = datetime.utcnow()
+        batch_run_id = run_id or str(uuid4())
         for item in items:
             keyword = item.get("keyword")
             platform = item.get("platform")
@@ -53,17 +72,42 @@ def _persist_trends(items: list[dict], tenant_id: int | None = None) -> int:
             trend_type = item.get("trend_type") or TrendType.VIDEO.value
             if trend_type not in {TrendType.VIDEO.value, TrendType.AUDIO.value}:
                 trend_type = TrendType.VIDEO.value
-            db.add(
-                Trend(
-                    tenant_id=tenant_id,
-                    platform=str(platform)[:20],
-                    keyword=str(keyword)[:200],
-                    trend_type=trend_type,
-                    volume=item.get("volume"),
-                    source_url=item.get("source_url"),
-                    extracted_at=now,
-                )
+
+            row = {
+                "tenant_id": tenant_id,
+                "platform": str(platform)[:20],
+                "keyword": str(keyword)[:200],
+                "title": str(item.get("title") or keyword)[:500],
+                "trend_type": trend_type,
+                "volume": item.get("volume"),
+                "views": item.get("views"),
+                "region": str(item.get("region") or "global")[:100],
+                "run_id": batch_run_id,
+                "source_url": item.get("source_url"),
+                "extracted_at": now,
+                "crawled_at": now,
+            }
+            statement = postgresql_insert(Trend).values(**row)
+            statement = statement.on_conflict_do_update(
+                index_elements=[
+                    func.coalesce(Trend.tenant_id, literal_column("0")),
+                    Trend.platform,
+                    Trend.region,
+                    Trend.run_id,
+                    Trend.keyword,
+                ],
+                index_where=Trend.run_id.isnot(None),
+                set_={
+                    "title": statement.excluded.title,
+                    "trend_type": statement.excluded.trend_type,
+                    "volume": statement.excluded.volume,
+                    "views": statement.excluded.views,
+                    "source_url": statement.excluded.source_url,
+                    "extracted_at": statement.excluded.extracted_at,
+                    "crawled_at": statement.excluded.crawled_at,
+                },
             )
+            db.execute(statement)
             count += 1
         db.commit()
         return count
@@ -75,27 +119,38 @@ def _persist_trends(items: list[dict], tenant_id: int | None = None) -> int:
         db.close()
 
 
-async def sync_trends(tenant_id: int | None = None) -> dict[str, int]:
-    logger.info("Trend sync starting — tenant=%s", tenant_id or "global")
-    scraper = TrendScraperAPI()
-    tiktok_items, facebook_items = await asyncio.gather(
-        scraper.fetch_tiktok_trends(),
-        scraper.fetch_facebook_trends(),
-    )
-    all_items = [*tiktok_items, *facebook_items]
-    inserted = _persist_trends(all_items, tenant_id=tenant_id)
-    logger.info(
-        "Trend sync complete — inserted=%s tiktok=%s facebook=%s tenant=%s",
-        inserted,
-        len(tiktok_items),
-        len(facebook_items),
-        tenant_id or "global",
-    )
-    return {
-        "inserted": inserted,
-        "tiktok_count": len(tiktok_items),
-        "facebook_count": len(facebook_items),
-    }
+async def sync_trends(tenant_id: int | None = None) -> dict[str, int | str]:
+    if not _trend_sync_lock.acquire(blocking=False):
+        logger.warning("Trend sync skipped because another run is active")
+        return {"inserted": 0, "tiktok_count": 0, "facebook_count": 0, "skipped": 1, "run_id": ""}
+
+    run_id = str(uuid4())
+    try:
+        logger.info("Trend sync starting — tenant=%s run_id=%s", tenant_id or "global", run_id)
+        scraper = TrendScraperAPI()
+        tiktok_items, facebook_items = await asyncio.gather(
+            scraper.fetch_tiktok_trends(),
+            scraper.fetch_facebook_trends(),
+        )
+        all_items = [*tiktok_items, *facebook_items]
+        inserted = _persist_trends(all_items, tenant_id=tenant_id, run_id=run_id)
+        logger.info(
+            "Trend sync complete — inserted=%s tiktok=%s facebook=%s tenant=%s run_id=%s",
+            inserted,
+            len(tiktok_items),
+            len(facebook_items),
+            tenant_id or "global",
+            run_id,
+        )
+        return {
+            "inserted": inserted,
+            "tiktok_count": len(tiktok_items),
+            "facebook_count": len(facebook_items),
+            "skipped": 0,
+            "run_id": run_id,
+        }
+    finally:
+        _trend_sync_lock.release()
 
 
 async def scrape_product(url: str, tenant_id: int, platform: str | None = None) -> dict:
@@ -219,7 +274,11 @@ async def root():
 
 
 @app.get("/trends/sync")
-async def trigger_trend_sync(tenant_id: int | None = Query(default=None)):
+async def trigger_trend_sync(
+    tenant_id: int | None = Query(default=None),
+    authorization: str | None = Header(default=None),
+):
+    _verify_worker_secret(authorization)
     try:
         result = await sync_trends(tenant_id=tenant_id)
         return {"status": "ok", **result}
