@@ -1,8 +1,7 @@
-import { Injectable, BadRequestException, ConflictException, UnauthorizedException, NotFoundException } from '@nestjs/common';
+import { Injectable, ConflictException, UnauthorizedException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
-import { plainToClass } from 'class-transformer';
 import * as argon2 from 'argon2';
 import * as crypto from 'crypto';
 import { User } from './entities/user.entity';
@@ -11,7 +10,8 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { UserRole } from '../common/enums/role.enum';
-import { JWT_ACCESS_SECRET, JWT_REFRESH_SECRET, ACCESS_TOKEN_EXPIRY, REFRESH_TOKEN_EXPIRY, ARGON2_OPTIONS } from './constants';
+import { AuditService } from '../audit/audit.service';
+import { JWT_ACCESS_SECRET, ACCESS_TOKEN_EXPIRY, ACCESS_TOKEN_EXPIRES_IN_SECONDS, ARGON2_OPTIONS } from './constants';
 
 @Injectable()
 export class AuthService {
@@ -21,6 +21,7 @@ export class AuthService {
     @InjectRepository(RefreshToken)
     private readonly refreshTokenRepository: Repository<RefreshToken>,
     private readonly jwtService: JwtService,
+    private readonly auditService: AuditService,
   ) {}
 
   /**
@@ -62,11 +63,7 @@ export class AuthService {
     // Store hashed refresh token in DB
     await this._storeRefreshToken(savedUser.id, refreshToken);
 
-    return {
-      user: this._excludePassword(savedUser),
-      accessToken,
-      refreshToken,
-    };
+    return this._tokenResponse(savedUser, accessToken, refreshToken);
   }
 
   /**
@@ -113,12 +110,15 @@ export class AuthService {
 
     // Update last login time
     await this.userRepository.update(user.id, { last_login_at: new Date() });
+    await this.auditService.record({
+      actorUserId: user.id,
+      action: 'auth.login',
+      entityType: 'user',
+      entityId: String(user.id),
+      metadata: { outcome: 'success' },
+    });
 
-    return {
-      user: this._excludePassword(user),
-      accessToken,
-      refreshToken,
-    };
+    return this._tokenResponse(user, accessToken, refreshToken);
   }
 
   /**
@@ -130,39 +130,16 @@ export class AuthService {
    */
   async refresh(refreshTokenDto: RefreshTokenDto) {
     const { refreshToken } = refreshTokenDto;
-
-    // Find token entry in DB by hashing provided token
-    const tokenHash = await argon2.hash(refreshToken, ARGON2_OPTIONS);
-
-    // Note: In production, we'd need to compare hashes by iterating or using a different approach
-    // For now, we verify the token is valid by checking against all non-revoked tokens
-    let tokenEntry: RefreshToken | null = null;
-
-    // Find the token by trying to verify against stored hashes
-    const allTokens = await this.refreshTokenRepository
-      .createQueryBuilder('rt')
-      .getMany();
-
-    for (const token of allTokens) {
-      try {
-        const isValid = await argon2.verify(token.token_hash, refreshToken);
-        if (isValid) {
-          tokenEntry = token;
-          break;
-        }
-      } catch (e) {
-        // Continue to next token
-      }
-    }
+    const tokenHash = this._hashRefreshToken(refreshToken);
+    const tokenEntry = await this.refreshTokenRepository.findOne({
+      where: { token_hash: tokenHash },
+    });
 
     if (!tokenEntry) {
       throw new UnauthorizedException('Invalid or expired refresh token');
     }
 
-    // REPLAY ATTACK DETECTION: Check if token already replaced
     if (tokenEntry.replaced_by_id !== null) {
-      // Token was already rotated - this is a replay attack
-      // Revoke ALL tokens for this user immediately
       await this.refreshTokenRepository.update(
         { user_id: tokenEntry.user_id },
         { revoked: true },
@@ -179,36 +156,21 @@ export class AuthService {
       throw new UnauthorizedException('Invalid or expired refresh token');
     }
 
-    // REPLAY ATTACK DETECTION: Check if token already replaced
-    if (tokenEntry.replaced_by_id !== null) {
-      // Token was already rotated - this is a replay attack
-      // Revoke ALL tokens for this user immediately
-      await this.refreshTokenRepository.update(
-        { user_id: tokenEntry.user_id },
-        { revoked: true },
-      );
-
-      throw new UnauthorizedException('Token replay detected - all sessions revoked');
-    }
-
-    // Get user to generate new tokens
     const user = await this.userRepository.findOne({ where: { id: tokenEntry.user_id } });
     if (!user) {
       throw new NotFoundException('User not found');
     }
 
-    // Generate new token pair
     const { accessToken, refreshToken: newRefreshToken } = await this._generateTokens(user);
 
-    // Get the new token ID that will be created
     const newTokenEntry = this.refreshTokenRepository.create({
       user_id: user.id,
-      token_hash: await argon2.hash(newRefreshToken, ARGON2_OPTIONS),
+      token_hash: this._hashRefreshToken(newRefreshToken),
       expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      revoked: false,
     });
     const savedNewToken = await this.refreshTokenRepository.save(newTokenEntry);
 
-    // TOKEN ROTATION: Mark old token as revoked and point to new token
     await this.refreshTokenRepository.update(
       { id: tokenEntry.id },
       {
@@ -217,19 +179,21 @@ export class AuthService {
       },
     );
 
-    // Keep the rotated token row so replay detection can revoke all sessions.
     await this.refreshTokenRepository
       .createQueryBuilder()
       .delete()
       .where('user_id = :userId', { userId: user.id })
       .andWhere('id NOT IN (:...ids)', { ids: [savedNewToken.id, tokenEntry.id] })
       .execute();
+    await this.auditService.record({
+      actorUserId: user.id,
+      action: 'auth.refresh',
+      entityType: 'user',
+      entityId: String(user.id),
+      metadata: { outcome: 'success' },
+    });
 
-    return {
-      user: this._excludePassword(user),
-      accessToken,
-      refreshToken: newRefreshToken,
-    };
+    return this._tokenResponse(user, accessToken, newRefreshToken);
   }
 
   /**
@@ -240,6 +204,22 @@ export class AuthService {
       { user_id: userId },
       { revoked: true },
     );
+    await this.auditService.record({
+      actorUserId: userId,
+      action: 'auth.logout',
+      entityType: 'user',
+      entityId: String(userId),
+      metadata: { outcome: 'success' },
+    });
+  }
+
+  async listSessions(userId: number) {
+    const sessions = await this.refreshTokenRepository.find({
+      where: { user_id: userId, revoked: false },
+      order: { created_at: 'DESC' },
+    });
+
+    return sessions.map(({ token_hash, ...session }) => session);
   }
 
   /**
@@ -273,7 +253,7 @@ export class AuthService {
    * Internal: Store refresh token as hashed value in DB
    */
   private async _storeRefreshToken(userId: number, refreshToken: string) {
-    const tokenHash = await argon2.hash(refreshToken, ARGON2_OPTIONS);
+    const tokenHash = this._hashRefreshToken(refreshToken);
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
     const tokenEntry = this.refreshTokenRepository.create({
@@ -284,6 +264,19 @@ export class AuthService {
     });
 
     await this.refreshTokenRepository.save(tokenEntry);
+  }
+
+  private _hashRefreshToken(refreshToken: string): string {
+    return crypto.createHash('sha256').update(refreshToken).digest('hex');
+  }
+
+  private _tokenResponse(user: User, accessToken: string, refreshToken: string) {
+    return {
+      user: this._excludePassword(user),
+      access_token: accessToken,
+      refresh_token: refreshToken,
+      expires_in: ACCESS_TOKEN_EXPIRES_IN_SECONDS,
+    };
   }
 
   /**

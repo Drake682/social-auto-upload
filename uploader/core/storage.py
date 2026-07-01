@@ -1,4 +1,5 @@
 import os
+import re
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -35,6 +36,32 @@ def _parse_s3_uri(s3_uri: str) -> tuple[str, str]:
     if parsed.scheme != "s3" or not parsed.netloc or not parsed.path.strip("/"):
         raise ValueError("Invalid S3 URI")
     return parsed.netloc, parsed.path.lstrip("/")
+
+
+def _safe_job_id(job_id: str) -> str:
+    safe = re.sub(r"[^a-zA-Z0-9_.-]", "_", str(job_id or "job")).strip("._")
+    return safe or "job"
+
+
+def download_s3_uri_to_local(s3_uri: str, job_id: str) -> str:
+    """Download an S3/MinIO object to a local temp file and return its absolute path."""
+    if not is_s3_uri(s3_uri):
+        path = Path(s3_uri).expanduser().resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f"Local video file not found: {path}")
+        return str(path)
+
+    bucket, key = _parse_s3_uri(s3_uri)
+    suffix = Path(key).suffix or ".mp4"
+    tmp_dir = Path(tempfile.gettempdir()) / "socialflow-uploader"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    tmp_path = tmp_dir / f"{_safe_job_id(job_id)}{suffix}"
+
+    if tmp_path.exists():
+        tmp_path.unlink()
+
+    _client().download_file(bucket, key, str(tmp_path))
+    return str(tmp_path.resolve())
 
 
 @contextmanager

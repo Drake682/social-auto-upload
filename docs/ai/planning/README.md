@@ -16,9 +16,13 @@ description: Break down work into actionable tasks and estimate timeline
 ## Task Breakdown
 **What specific work needs to be done?**
 
-### Phase 1: Foundation
-- [ ] Task 1.1: [Description]
-- [ ] Task 1.2: [Description]
+### Phase 1: Auth + License Gate
+- [x] Task 1: Auth response contract + refresh-token hardening
+- [x] Task 2: License activate/deactivate/status endpoints
+- [x] Task 4: Global license gate guard
+- [x] Task 5: Low-effort hardening — rate limits, audit logs, session list
+- [x] Task 3: Frontend auth wiring
+- [x] Task 6: Docs + regression verification
 
 ### Phase 2: Core Features
 - [ ] Task 2.1: [Description]

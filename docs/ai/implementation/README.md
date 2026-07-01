@@ -25,21 +25,25 @@ description: Technical implementation notes, patterns, and code guidelines
 **Key technical details to remember:**
 
 ### Core Features
-- Feature 1: Implementation approach
-- Feature 2: Implementation approach
+- Phase 1 Task 1 keeps `argon2` for password hashing and returns auth tokens using the API contract `{ access_token, refresh_token, expires_in }`.
+- Phase 1 Task 1 stores refresh tokens as deterministic SHA-256 hex digests for direct database lookup, while keeping random opaque refresh tokens on the wire.
+- Phase 1 Task 2 defines license tiers as `free | basic | pro | enterprise`, adds user-bound license activation, current-user deactivation, and `/license/status` tier-limit reporting.
+- Phase 1 Task 4 adds a global `LicenseGuard` after JWT and role guards; public routes and license bootstrap/admin routes are exempt through `@Public()` / `@SkipLicense()` metadata.
+- Phase 1 Task 5 adds best-effort audit logging for auth/license events, rate limits `/auth/refresh` and `/license/activate`, and exposes `GET /auth/sessions` without refresh token hashes.
+- Phase 1 Task 3 aligns Vue auth store and Axios refresh queue with backend snake_case token contract and normalizes backend `display_name` to frontend `displayName`.
 - Feature 3: Implementation approach
 
 ### Patterns & Best Practices
-- Design patterns being used
-- Code style guidelines
+- Auth token responses are normalized in `AuthService._tokenResponse()` to prevent endpoint-specific response drift.
+- Refresh token lookup uses Node `crypto` only; no extra package dependency.
 - Common utilities/helpers
 
 ## Integration Points
 **How do pieces connect?**
 
-- API integration details
-- Database connections
-- Third-party service setup
+- Phase 0 Task 3 verifies the Vue 3 frontend in `frontend/` builds with `npm run build`.
+- `frontend/vite.config.ts` runs Vite dev server on host `0.0.0.0`, port `5173`.
+- Frontend package scripts are `dev`, `build`, `preview`, and `lint` in `frontend/package.json`.
 
 ## Error Handling
 **How do we handle failures?**

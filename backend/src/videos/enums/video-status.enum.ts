@@ -6,5 +6,7 @@ export enum VideoStatus {
   GENERATING_VIDEO = 'generating_video',
   RENDERING = 'rendering',
   DONE = 'done',
+  PUBLISHING = 'publishing',
+  PUBLISHED = 'published',
   FAILED = 'failed',
 }

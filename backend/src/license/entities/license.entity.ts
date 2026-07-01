@@ -22,6 +22,10 @@ export class License {
   @Column({ type: 'integer', default: 5 })
   max_activations: number;
 
+  @Column({ type: 'integer', nullable: true })
+  @Index('idx_licenses_bound_user_id')
+  bound_user_id: number;
+
   @Column({ type: 'timestamp', nullable: true })
   expires_at: Date;
 

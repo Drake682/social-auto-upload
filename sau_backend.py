@@ -16,6 +16,7 @@ from myUtils.postVideo import post_video_tencent, post_video_DouYin, post_video_
 from uploader.facebook_uploader.main import facebook_bp
 from uploader.tiktok_uploader.main import tiktok_bp
 from uploader.shopee_uploader.main import shopee_bp
+from uploader.core.dispatch import uploader_dispatch_bp
 
 active_queues = {}
 app = Flask(__name__)
@@ -27,6 +28,7 @@ CORS(app)
 app.register_blueprint(facebook_bp)
 app.register_blueprint(tiktok_bp)
 app.register_blueprint(shopee_bp)
+app.register_blueprint(uploader_dispatch_bp)
 
 @app.route('/health')
 def health():

@@ -9,11 +9,13 @@ import { User } from './entities/user.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { LocalStrategy } from './strategies/local.strategy';
 import { JwtStrategy } from './strategies/jwt.strategy';
+import { AuditModule } from '../audit/audit.module';
 import { JWT_ACCESS_SECRET, ACCESS_TOKEN_EXPIRY } from './constants';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([User, RefreshToken]),
+    AuditModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       inject: [ConfigService],

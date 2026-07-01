@@ -3,13 +3,16 @@ import { Throttle } from '@nestjs/throttler';
 import { LicenseService } from './license.service';
 import { CreateLicenseDto } from './dto/create-license.dto';
 import { ValidateLicenseDto } from './dto/validate-license.dto';
+import { ActivateLicenseDto } from './dto/activate-license.dto';
 import { Public } from '../common/decorators/public.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { UserRole } from '../common/enums/role.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { SkipLicense } from '../common/decorators/skip-license.decorator';
 
+@SkipLicense()
 @Controller('license')
 export class LicenseController {
   constructor(private readonly licenseService: LicenseService) {}
@@ -28,6 +31,52 @@ export class LicenseController {
       code: 201,
       data: result,
       msg: 'License created successfully',
+    };
+  }
+
+  /**
+   * POST /license/activate
+   * Protected endpoint - bind license key to current user/device
+   */
+  @Throttle(3, 60000)
+  @Post('activate')
+  @HttpCode(HttpStatus.OK)
+  async activate(@CurrentUser() user: any, @Body() activateDto: ActivateLicenseDto) {
+    const result = await this.licenseService.activate(user.sub, activateDto);
+    return {
+      code: 200,
+      data: result,
+      msg: 'License activated',
+    };
+  }
+
+  /**
+   * POST /license/deactivate
+   * Protected endpoint - remove current user's license binding
+   */
+  @Post('deactivate')
+  @HttpCode(HttpStatus.OK)
+  async deactivateCurrentUser(@CurrentUser() user: any) {
+    const result = await this.licenseService.deactivateUserLicense(user.sub);
+    return {
+      code: 200,
+      data: result,
+      msg: 'License deactivated',
+    };
+  }
+
+  /**
+   * GET /license/status
+   * Protected endpoint - current user's tier/expiry/limits
+   */
+  @Get('status')
+  @HttpCode(HttpStatus.OK)
+  async status(@CurrentUser() user: any) {
+    const result = await this.licenseService.status(user.sub);
+    return {
+      code: 200,
+      data: result,
+      msg: 'License status retrieved',
     };
   }
 

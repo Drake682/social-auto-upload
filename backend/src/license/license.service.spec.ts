@@ -7,9 +7,11 @@ import { LicenseService } from './license.service';
 import { LicenseCryptoService } from './license-crypto.service';
 import { License } from './entities/license.entity';
 import { LicenseActivation } from './entities/license-activation.entity';
+import { User } from '../auth/entities/user.entity';
 import { CreateLicenseDto } from './dto/create-license.dto';
 import { ValidateLicenseDto } from './dto/validate-license.dto';
 import { LicenseTier } from '../common/enums/license-tier.enum';
+import { AuditService } from '../audit/audit.service';
 
 jest.mock('argon2');
 
@@ -17,17 +19,21 @@ describe('LicenseService', () => {
   let service: LicenseService;
   let licenseRepository: jest.Mocked<Repository<License>>;
   let activationRepository: jest.Mocked<Repository<LicenseActivation>>;
+  let userRepository: jest.Mocked<Repository<User>>;
   let cryptoService: jest.Mocked<LicenseCryptoService>;
+  let auditService: jest.Mocked<AuditService>;
 
   const mockLicense: License = {
     id: 1,
     key_hash: 'hashed_license_key',
     key_display: 'ABCD-EFGH-IJKL-MNOP',
-    tier: LicenseTier.STANDARD,
+    tier: LicenseTier.PRO,
     max_devices: 2,
     max_activations: 3,
+    bound_user_id: null,
     expires_at: new Date(Date.now() + 86400000 * 30),
     is_active: true,
+    disabled_reason: null,
     created_at: new Date(),
     updated_at: new Date(),
   } as License;
@@ -71,13 +77,25 @@ describe('LicenseService', () => {
           provide: getRepositoryToken(LicenseActivation),
           useValue: createMockRepository(),
         },
+        {
+          provide: getRepositoryToken(User),
+          useValue: createMockRepository(),
+        },
+        {
+          provide: AuditService,
+          useValue: {
+            record: jest.fn().mockResolvedValue(undefined),
+          },
+        },
       ],
     }).compile();
 
     service = module.get<LicenseService>(LicenseService);
     licenseRepository = module.get(getRepositoryToken(License));
     activationRepository = module.get(getRepositoryToken(LicenseActivation));
+    userRepository = module.get(getRepositoryToken(User));
     cryptoService = module.get(LicenseCryptoService);
+    auditService = module.get(AuditService);
   });
 
   afterEach(() => {
@@ -86,7 +104,7 @@ describe('LicenseService', () => {
 
   describe('create', () => {
     const createDto: CreateLicenseDto = {
-      tier: LicenseTier.STANDARD,
+      tier: LicenseTier.PRO,
       maxDevices: 2,
       maxActivations: 3,
       expiresAt: new Date(Date.now() + 86400000 * 30).toISOString(),
@@ -104,7 +122,7 @@ describe('LicenseService', () => {
       expect(licenseRepository.create).toHaveBeenCalledWith(
         expect.objectContaining({
           key_hash: 'hashed_license_key',
-          tier: LicenseTier.STANDARD,
+          tier: LicenseTier.PRO,
           max_devices: 2,
           max_activations: 3,
         }),
@@ -152,7 +170,7 @@ describe('LicenseService', () => {
         }),
       );
       expect(result).toHaveProperty('activated', true);
-      expect(result).toHaveProperty('tier', LicenseTier.STANDARD);
+      expect(result).toHaveProperty('tier', LicenseTier.PRO);
     });
 
     it('should allow re-validation from already activated device', async () => {
@@ -226,7 +244,118 @@ describe('LicenseService', () => {
     });
   });
 
+  describe('activate', () => {
+    const activateDto = {
+      key: 'ABCD-EFGH-IJKL-MNOP',
+      deviceFingerprint: 'fp_device_a',
+      hwId: 'hw_device_a',
+      deviceName: 'Test Device A',
+    };
+
+    it('should bind license to user and activate device', async () => {
+      licenseRepository.findOneBy.mockResolvedValue(mockLicense);
+      userRepository.findOneBy.mockResolvedValue({ id: 7, license_key: null } as User);
+      activationRepository.findOne.mockResolvedValue(null);
+      activationRepository.count.mockResolvedValue(0);
+      activationRepository.create.mockReturnValue({ id: 10 } as LicenseActivation);
+      activationRepository.save.mockResolvedValue({ id: 10 } as LicenseActivation);
+      licenseRepository.update.mockResolvedValue({} as any);
+      userRepository.update.mockResolvedValue({} as any);
+
+      const result = await service.activate(7, activateDto);
+
+      expect(licenseRepository.update).toHaveBeenCalledWith(1, { bound_user_id: 7 });
+      expect(userRepository.update).toHaveBeenCalledWith(7, { license_key: mockLicense.key_display });
+      expect(result).toEqual(
+        expect.objectContaining({
+          tier: LicenseTier.PRO,
+          active: true,
+          limits: expect.objectContaining({ accounts: 50, postsPerDay: 200, proxyPool: true, aiVideo: true }),
+        }),
+      );
+      expect(auditService.record).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'license.activate', actorUserId: 7, entityId: '1' }),
+      );
+    });
+
+    it('should reject license already bound to another user', async () => {
+      licenseRepository.findOneBy.mockResolvedValue({ ...mockLicense, bound_user_id: 8 });
+      userRepository.findOneBy.mockResolvedValue({ id: 7 } as User);
+
+      await expect(service.activate(7, activateDto)).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('validateAccess', () => {
+    it('should return true only when user has active bound license', async () => {
+      userRepository.findOneBy.mockResolvedValue({ id: 7, license_key: mockLicense.key_display } as User);
+      licenseRepository.findOneBy.mockResolvedValue({ ...mockLicense, bound_user_id: 7 });
+
+      await expect(service.validateAccess(7)).resolves.toBe(true);
+    });
+
+    it('should return false when license is bound to another user', async () => {
+      userRepository.findOneBy.mockResolvedValue({ id: 7, license_key: mockLicense.key_display } as User);
+      licenseRepository.findOneBy.mockResolvedValue({ ...mockLicense, bound_user_id: 8 });
+
+      await expect(service.validateAccess(7)).resolves.toBe(false);
+    });
+  });
+
+  describe('status', () => {
+    it('should return active license status with tier limits for bound user', async () => {
+      userRepository.findOneBy.mockResolvedValue({ id: 7, license_key: mockLicense.key_display } as User);
+      licenseRepository.findOneBy.mockResolvedValue({ ...mockLicense, bound_user_id: 7 });
+      activationRepository.count.mockResolvedValue(1);
+
+      const result = await service.status(7);
+
+      expect(result).toEqual(
+        expect.objectContaining({
+          active: true,
+          tier: LicenseTier.PRO,
+          expiry: mockLicense.expires_at,
+          activationCount: 1,
+          limits: expect.objectContaining({ accounts: 50, postsPerDay: 200 }),
+        }),
+      );
+    });
+
+    it('should return inactive free status when user has no license', async () => {
+      userRepository.findOneBy.mockResolvedValue({ id: 7, license_key: null } as User);
+
+      const result = await service.status(7);
+
+      expect(result).toEqual(
+        expect.objectContaining({
+          active: false,
+          tier: LicenseTier.FREE,
+          limits: expect.objectContaining({ accounts: 3, postsPerDay: 10 }),
+        }),
+      );
+    });
+  });
+
   describe('deactivate', () => {
+    it('should deactivate current user license binding and activations', async () => {
+      userRepository.findOneBy.mockResolvedValue({ id: 7, license_key: mockLicense.key_display } as User);
+      licenseRepository.findOneBy.mockResolvedValue({ ...mockLicense, bound_user_id: 7 });
+      licenseRepository.update.mockResolvedValue({} as any);
+      activationRepository.update.mockResolvedValue({} as any);
+      userRepository.update.mockResolvedValue({} as any);
+
+      await service.deactivateUserLicense(7);
+
+      expect(licenseRepository.update).toHaveBeenCalledWith(1, { bound_user_id: null });
+      expect(activationRepository.update).toHaveBeenCalledWith({ license_id: 1 }, { is_active: false });
+      expect(userRepository.update).toHaveBeenCalledWith(7, { license_key: null });
+      expect(auditService.record).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'license.deactivate', actorUserId: 7, entityId: '1' }),
+      );
+    });
+  });
+
+  describe('adminDeactivate', () => {
     it('should deactivate license and all activations', async () => {
       licenseRepository.findOneBy.mockResolvedValue(mockLicense);
       licenseRepository.update.mockResolvedValue({} as any);

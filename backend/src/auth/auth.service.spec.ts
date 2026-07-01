@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
 import { BadRequestException, ConflictException, UnauthorizedException, NotFoundException } from '@nestjs/common';
 import * as argon2 from 'argon2';
+import * as crypto from 'crypto';
 import { AuthService } from './auth.service';
 import { User } from './entities/user.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
@@ -11,6 +12,7 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { UserRole } from '../common/enums/role.enum';
+import { AuditService } from '../audit/audit.service';
 
 jest.mock('argon2');
 
@@ -19,6 +21,7 @@ describe('AuthService', () => {
   let userRepository: jest.Mocked<Repository<User>>;
   let refreshTokenRepository: jest.Mocked<Repository<RefreshToken>>;
   let jwtService: jest.Mocked<JwtService>;
+  let auditService: jest.Mocked<AuditService>;
 
   const mockUser: User = {
     id: 1,
@@ -41,6 +44,7 @@ describe('AuthService', () => {
     count: jest.fn(),
     update: jest.fn(),
     delete: jest.fn(),
+    find: jest.fn(),
     createQueryBuilder: jest.fn(() => ({
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
@@ -70,6 +74,12 @@ describe('AuthService', () => {
             verify: jest.fn(),
           },
         },
+        {
+          provide: AuditService,
+          useValue: {
+            record: jest.fn().mockResolvedValue(undefined),
+          },
+        },
       ],
     }).compile();
 
@@ -77,6 +87,7 @@ describe('AuthService', () => {
     userRepository = module.get(getRepositoryToken(User));
     refreshTokenRepository = module.get(getRepositoryToken(RefreshToken));
     jwtService = module.get(JwtService);
+    auditService = module.get(AuditService);
 
     // Default sign mock returns predictable tokens
     jwtService.sign
@@ -116,8 +127,9 @@ describe('AuthService', () => {
       // Verify password never stored or returned in plain text
       expect(JSON.stringify(result)).not.toContain(registerDto.password);
       expect(result.user).not.toHaveProperty('password_hash');
-      expect(result).toHaveProperty('accessToken');
-      expect(result).toHaveProperty('refreshToken');
+      expect(result).toHaveProperty('access_token');
+      expect(result).toHaveProperty('refresh_token');
+      expect(result).toHaveProperty('expires_in', 900);
     });
 
     it('should reject duplicate email with 409 Conflict', async () => {
@@ -198,7 +210,6 @@ describe('AuthService', () => {
     it('should return tokens and user, storing hashed refresh token', async () => {
       userRepository.findOneBy.mockResolvedValue(mockUser);
       (argon2.verify as jest.Mock).mockResolvedValue(true);
-      (argon2.hash as jest.Mock).mockResolvedValue('hashed_refresh_token');
       refreshTokenRepository.create.mockReturnValue({} as RefreshToken);
       refreshTokenRepository.save.mockResolvedValue({ id: 1 } as RefreshToken);
       refreshTokenRepository.delete.mockResolvedValue({ affected: 1, raw: [] });
@@ -210,13 +221,17 @@ describe('AuthService', () => {
       expect(refreshTokenRepository.create).toHaveBeenCalledWith(
         expect.objectContaining({
           user_id: mockUser.id,
-          token_hash: 'hashed_refresh_token',
+          token_hash: crypto.createHash('sha256').update((result as any).refresh_token).digest('hex'),
           revoked: false,
         }),
       );
-      expect(result).toHaveProperty('accessToken');
-      expect(result).toHaveProperty('refreshToken');
+      expect(result).toHaveProperty('access_token');
+      expect(result).toHaveProperty('refresh_token');
+      expect(result).toHaveProperty('expires_in', 900);
       expect(result.user).not.toHaveProperty('password_hash');
+      expect(auditService.record).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'auth.login', actorUserId: mockUser.id }),
+      );
     });
 
     it('should throw 401 for invalid credentials (generic error)', async () => {
@@ -234,7 +249,7 @@ describe('AuthService', () => {
     const mockRefreshToken: RefreshToken = {
       id: 1,
       user_id: 1,
-      token_hash: 'hashed_old_token',
+      token_hash: crypto.createHash('sha256').update('old_refresh_token').digest('hex'),
       device_info: null,
       expires_at: new Date(Date.now() + 86400000),
       revoked: false,
@@ -243,48 +258,35 @@ describe('AuthService', () => {
     } as RefreshToken;
 
     it('should rotate refresh token and return new pair', async () => {
-      const getManyMock = jest.fn().mockResolvedValue([mockRefreshToken]);
-      refreshTokenRepository.createQueryBuilder.mockReturnValue({
-        where: jest.fn().mockReturnThis(),
-        andWhere: jest.fn().mockReturnThis(),
-        delete: jest.fn().mockReturnThis(),
-        execute: jest.fn().mockResolvedValue({}),
-        getOne: jest.fn(),
-        getMany: getManyMock,
-      } as any);
-      (argon2.verify as jest.Mock).mockResolvedValue(true);
+      refreshTokenRepository.findOne.mockResolvedValue(mockRefreshToken);
       userRepository.findOne.mockResolvedValue(mockUser);
       refreshTokenRepository.create.mockReturnValue({} as RefreshToken);
       refreshTokenRepository.save.mockResolvedValue({ id: 2 } as RefreshToken);
       refreshTokenRepository.update.mockResolvedValue({} as any);
-      (argon2.hash as jest.Mock).mockResolvedValue('hashed_new_refresh_token');
-
       const result = await service.refresh(refreshDto);
 
-      expect(argon2.verify).toHaveBeenCalledWith('hashed_old_token', 'old_refresh_token');
+      expect(refreshTokenRepository.findOne).toHaveBeenCalledWith({
+        where: { token_hash: mockRefreshToken.token_hash },
+      });
+      expect(argon2.verify).not.toHaveBeenCalledWith(mockRefreshToken.token_hash, 'old_refresh_token');
       expect(refreshTokenRepository.update).toHaveBeenCalledWith(
         { id: mockRefreshToken.id },
         expect.objectContaining({ revoked: true, replaced_by_id: 2 }),
       );
-      expect(result).toHaveProperty('accessToken');
-      expect(result).toHaveProperty('refreshToken');
-      expect(result.refreshToken).not.toBe('old_refresh_token');
+      expect(result).toHaveProperty('access_token');
+      expect(result).toHaveProperty('refresh_token');
+      expect(result).toHaveProperty('expires_in', 900);
+      expect((result as any).refresh_token).not.toBe('old_refresh_token');
+      expect(auditService.record).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'auth.refresh', actorUserId: mockUser.id }),
+      );
     });
 
     it('should detect replay attack on already-used refresh token', async () => {
-      const getManyMock = jest.fn().mockResolvedValue([{
+      refreshTokenRepository.findOne.mockResolvedValue({
         ...mockRefreshToken,
         replaced_by_id: 2,
-      }]);
-      refreshTokenRepository.createQueryBuilder.mockReturnValue({
-        where: jest.fn().mockReturnThis(),
-        andWhere: jest.fn().mockReturnThis(),
-        delete: jest.fn().mockReturnThis(),
-        execute: jest.fn().mockResolvedValue({}),
-        getOne: jest.fn(),
-        getMany: getManyMock,
-      } as any);
-      (argon2.verify as jest.Mock).mockResolvedValue(true);
+      });
       refreshTokenRepository.update.mockResolvedValue({} as any);
 
       await expect(service.refresh(refreshDto)).rejects.toThrow(UnauthorizedException);
@@ -296,51 +298,25 @@ describe('AuthService', () => {
     });
 
     it('should reject expired refresh token', async () => {
-      const getManyMock = jest.fn().mockResolvedValue([{
+      refreshTokenRepository.findOne.mockResolvedValue({
         ...mockRefreshToken,
         expires_at: new Date(Date.now() - 1000),
-      }]);
-      refreshTokenRepository.createQueryBuilder.mockReturnValue({
-        where: jest.fn().mockReturnThis(),
-        andWhere: jest.fn().mockReturnThis(),
-        delete: jest.fn().mockReturnThis(),
-        execute: jest.fn().mockResolvedValue({}),
-        getOne: jest.fn(),
-        getMany: getManyMock,
-      } as any);
-      (argon2.verify as jest.Mock).mockResolvedValue(true);
+      });
 
       await expect(service.refresh(refreshDto)).rejects.toThrow(UnauthorizedException);
     });
 
     it('should reject revoked refresh token', async () => {
-      const getManyMock = jest.fn().mockResolvedValue([{
+      refreshTokenRepository.findOne.mockResolvedValue({
         ...mockRefreshToken,
         revoked: true,
-      }]);
-      refreshTokenRepository.createQueryBuilder.mockReturnValue({
-        where: jest.fn().mockReturnThis(),
-        andWhere: jest.fn().mockReturnThis(),
-        delete: jest.fn().mockReturnThis(),
-        execute: jest.fn().mockResolvedValue({}),
-        getOne: jest.fn(),
-        getMany: getManyMock,
-      } as any);
-      (argon2.verify as jest.Mock).mockResolvedValue(true);
+      });
 
       await expect(service.refresh(refreshDto)).rejects.toThrow(UnauthorizedException);
     });
 
     it('should reject non-existent refresh token', async () => {
-      const getManyMock = jest.fn().mockResolvedValue([]);
-      refreshTokenRepository.createQueryBuilder.mockReturnValue({
-        where: jest.fn().mockReturnThis(),
-        andWhere: jest.fn().mockReturnThis(),
-        delete: jest.fn().mockReturnThis(),
-        execute: jest.fn().mockResolvedValue({}),
-        getOne: jest.fn(),
-        getMany: getManyMock,
-      } as any);
+      refreshTokenRepository.findOne.mockResolvedValue(null);
 
       await expect(service.refresh(refreshDto)).rejects.toThrow(UnauthorizedException);
     });
@@ -356,6 +332,37 @@ describe('AuthService', () => {
         { user_id: 1 },
         { revoked: true },
       );
+      expect(auditService.record).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'auth.logout', actorUserId: 1 }),
+      );
+    });
+  });
+
+  describe('listSessions', () => {
+    it('should list active refresh-token sessions without token hashes', async () => {
+      refreshTokenRepository.find.mockResolvedValue([
+        {
+          id: 1,
+          user_id: 1,
+          token_hash: 'secret_hash',
+          device_info: { ipAddress: '127.0.0.1' },
+          expires_at: new Date(Date.now() + 86400000),
+          revoked: false,
+          replaced_by_id: null,
+          created_at: new Date(),
+        } as RefreshToken,
+      ]);
+
+      const result = await service.listSessions(1);
+
+      expect(refreshTokenRepository.find).toHaveBeenCalledWith({
+        where: { user_id: 1, revoked: false },
+        order: { created_at: 'DESC' },
+      });
+      expect(result[0]).toEqual(
+        expect.objectContaining({ id: 1, device_info: { ipAddress: '127.0.0.1' } }),
+      );
+      expect(result[0]).not.toHaveProperty('token_hash');
     });
   });
 

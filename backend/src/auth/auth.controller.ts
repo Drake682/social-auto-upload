@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, UseGuards, Req, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Get, Body, HttpCode, HttpStatus } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
@@ -56,6 +56,7 @@ export class AuthController {
    */
   @Public()
   @Post('refresh')
+  @Throttle(10, 60000)
   @HttpCode(HttpStatus.CREATED)
   async refresh(@Body() refreshTokenDto: RefreshTokenDto) {
     const result = await this.authService.refresh(refreshTokenDto);
@@ -78,6 +79,17 @@ export class AuthController {
       code: 200,
       data: null,
       msg: 'Logged out successfully',
+    };
+  }
+
+  @Get('sessions')
+  @HttpCode(HttpStatus.OK)
+  async listSessions(@CurrentUser() user: any) {
+    const result = await this.authService.listSessions(user.sub);
+    return {
+      code: 200,
+      data: result,
+      msg: 'Sessions retrieved',
     };
   }
 

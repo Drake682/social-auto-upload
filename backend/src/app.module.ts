@@ -14,6 +14,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
 import { HealthModule } from './health/health.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
+import { LicenseGuard } from './common/guards/license.guard';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
 
 @Module({
@@ -66,6 +67,10 @@ import { TransformInterceptor } from './common/interceptors/transform.intercepto
     {
       provide: APP_GUARD,
       useClass: RolesGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: LicenseGuard,
     },
     {
       provide: APP_INTERCEPTOR,

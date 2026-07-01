@@ -65,10 +65,10 @@ dmypy.json
 # Project specific
 .DS_Store
 .claude/
-videos/
-uploads/
-cache/
-logs/
+/videos/
+/uploads/
+/cache/
+/logs/
 cookies/
 qrcode.png
 

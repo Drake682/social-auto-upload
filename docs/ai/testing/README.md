@@ -23,6 +23,33 @@ description: Define testing approach, test cases, and quality assurance
 - [x] Full backend unit suite passes with `npm test -- --runInBand`.
 - [x] Backend build passes with `npm run build`.
 
+### Phase 1 Task 1 — Auth contract + refresh-token hardening
+- [x] `backend/src/auth/auth.service.spec.ts` verifies register/login/refresh return `{ access_token, refresh_token, expires_in: 900 }`.
+- [x] Refresh tokens are stored and found by SHA-256 digest instead of scanning all argon2 hashes.
+- [x] Replay, expired, revoked, and non-existent refresh token paths remain covered.
+
+### Phase 1 Task 2 — License activate/deactivate/status
+- [x] `backend/src/license/license.service.spec.ts` verifies license activation binds key to user and device.
+- [x] Status returns active `pro` limits and inactive `free` fallback.
+- [x] Current-user deactivation clears user binding and disables license activations.
+- [x] Legacy admin license create/validate/deactivate tests remain green with new tier enum.
+
+### Phase 1 Task 4 — License gate guard
+- [x] `backend/src/common/guards/license.guard.spec.ts` verifies public route bypass, `@SkipLicense()` bypass, active-license allow, and no-license block.
+- [x] `backend/src/license/license.service.spec.ts` verifies `validateAccess()` only grants access to an active license bound to current user.
+- [x] Backend build verifies global guard wiring compiles with Nest providers.
+
+### Phase 1 Task 5 — Low-effort hardening
+- [x] `backend/src/audit/audit.service.spec.ts` verifies audit events persist sanitized metadata and failures do not block main flows.
+- [x] `backend/src/auth/auth.service.spec.ts` verifies login/refresh/logout audit events and session listing without token hashes.
+- [x] `backend/src/license/license.service.spec.ts` verifies license activate/deactivate audit events.
+- [x] Backend build verifies audit module wiring and rate-limit decorators compile.
+
+### Phase 1 Task 3 — Frontend auth wiring
+- [x] `frontend` production build verifies Login/Register/AuthStore/refresh queue compile against backend `{ access_token, refresh_token }` contract.
+- [x] User normalization maps backend `display_name` to frontend `displayName` for layout display.
+- [ ] No frontend unit test runner exists yet; build is current verification gate.
+
 ### Component/Module 2
 - [ ] Test case 1: [Description]
 - [ ] Test case 2: [Description]
@@ -63,9 +90,12 @@ description: Define testing approach, test cases, and quality assurance
 ## Manual Testing
 **What requires human validation?**
 
-- UI/UX testing checklist (include accessibility)
-- Browser/device compatibility
-- Smoke tests after deployment
+- [x] Phase 0 Task 3: `npm run build` in `frontend/` exits 0 with Vite production build output.
+- [x] Phase 0 Task 3: `npm run dev -- --host 0.0.0.0 --port 5173` starts Vite dev server on port 5173.
+- [x] Phase 0 Task 3: `curl http://127.0.0.1:5173` returns Vite-served `index.html`.
+- [ ] UI/UX testing checklist (include accessibility)
+- [ ] Browser/device compatibility
+- [ ] Smoke tests after deployment
 
 ## Performance Testing
 **How do we validate performance?**

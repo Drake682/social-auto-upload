@@ -3,9 +3,31 @@ import { ref, computed } from 'vue';
 import { api } from '@/api';
 
 export interface User {
-  id: string;
+  id: number;
   email: string;
   displayName: string;
+  role?: string;
+  tenantId?: number;
+}
+
+interface BackendUser {
+  id: number;
+  email: string;
+  display_name?: string | null;
+  displayName?: string | null;
+  role?: string;
+  tenant_id?: number | null;
+  tenantId?: number | null;
+}
+
+function normalizeUser(backendUser: BackendUser): User {
+  return {
+    id: backendUser.id,
+    email: backendUser.email,
+    displayName: backendUser.displayName || backendUser.display_name || backendUser.email,
+    role: backendUser.role,
+    tenantId: backendUser.tenantId || backendUser.tenant_id || undefined,
+  };
 }
 
 export const useAuthStore = defineStore('auth', () => {
@@ -60,11 +82,11 @@ export const useAuthStore = defineStore('auth', () => {
       const response = await api.post('/auth/login', { email, password });
 
       // Backend TransformInterceptor wraps: { code, data, msg }
-      const { accessToken: newAccessToken, refreshToken: newRefreshToken, user: newUser } =
+      const { access_token: newAccessToken, refresh_token: newRefreshToken, user: newUser } =
         response.data.data;
 
       setTokens(newAccessToken, newRefreshToken);
-      setUser(newUser);
+      setUser(normalizeUser(newUser));
       return { success: true };
     } catch (error: any) {
       const message = error.response?.data?.msg || error.response?.data?.message || 'Login failed';
@@ -77,11 +99,11 @@ export const useAuthStore = defineStore('auth', () => {
       const response = await api.post('/auth/register', { email, password, displayName });
 
       // Backend TransformInterceptor wraps: { code, data, msg }
-      const { accessToken: newAccessToken, refreshToken: newRefreshToken, user: newUser } =
+      const { access_token: newAccessToken, refresh_token: newRefreshToken, user: newUser } =
         response.data.data;
 
       setTokens(newAccessToken, newRefreshToken);
-      setUser(newUser);
+      setUser(normalizeUser(newUser));
       return { success: true };
     } catch (error: any) {
       const message = error.response?.data?.msg || error.response?.data?.message || 'Registration failed';

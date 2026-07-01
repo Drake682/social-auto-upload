@@ -3,10 +3,13 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { License } from './entities/license.entity';
 import { LicenseActivation } from './entities/license-activation.entity';
+import { User } from '../auth/entities/user.entity';
 import { LicenseCryptoService } from './license-crypto.service';
 import { CreateLicenseDto } from './dto/create-license.dto';
 import { ValidateLicenseDto } from './dto/validate-license.dto';
+import { ActivateLicenseDto } from './dto/activate-license.dto';
 import { LicenseTier } from '../common/enums/license-tier.enum';
+import { AuditService } from '../audit/audit.service';
 
 @Injectable()
 export class LicenseService {
@@ -15,7 +18,10 @@ export class LicenseService {
     private readonly licenseRepository: Repository<License>,
     @InjectRepository(LicenseActivation)
     private readonly activationRepository: Repository<LicenseActivation>,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
     private readonly cryptoService: LicenseCryptoService,
+    private readonly auditService: AuditService,
   ) {}
 
   /**
@@ -155,6 +161,93 @@ export class LicenseService {
     };
   }
 
+  async activate(userId: number, activateDto: ActivateLicenseDto) {
+    const user = await this.userRepository.findOneBy({ id: userId });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const license = await this.licenseRepository.findOneBy({ key_display: activateDto.key });
+    if (!license) {
+      throw new NotFoundException('License key not found');
+    }
+
+    this.assertUsableLicense(license);
+
+    if (license.bound_user_id && license.bound_user_id !== userId) {
+      throw new ForbiddenException('License already bound to another user');
+    }
+
+    await this.validate({
+      key: activateDto.key,
+      deviceFingerprint: activateDto.deviceFingerprint,
+      hwId: activateDto.hwId,
+      deviceName: activateDto.deviceName,
+    });
+
+    if (!license.bound_user_id) {
+      await this.licenseRepository.update(license.id, { bound_user_id: userId });
+    }
+    await this.userRepository.update(userId, { license_key: license.key_display });
+    await this.auditService.record({
+      actorUserId: userId,
+      action: 'license.activate',
+      entityType: 'license',
+      entityId: String(license.id),
+      metadata: { tier: license.tier, outcome: 'success' },
+    });
+
+    return this.buildStatus(license, true, await this.getActivationCount(license.id));
+  }
+
+  async status(userId: number) {
+    const user = await this.userRepository.findOneBy({ id: userId });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (!user.license_key) {
+      return this.buildFreeStatus();
+    }
+
+    const license = await this.licenseRepository.findOneBy({ key_display: user.license_key });
+    if (!license || license.bound_user_id !== userId || !this.isLicenseUsable(license)) {
+      return this.buildFreeStatus();
+    }
+
+    return this.buildStatus(license, true, await this.getActivationCount(license.id));
+  }
+
+  async deactivateUserLicense(userId: number) {
+    const user = await this.userRepository.findOneBy({ id: userId });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (!user.license_key) {
+      return { success: true, message: 'No active license binding' };
+    }
+
+    const license = await this.licenseRepository.findOneBy({ key_display: user.license_key });
+    if (!license || license.bound_user_id !== userId) {
+      await this.userRepository.update(userId, { license_key: null });
+      return { success: true, message: 'License binding cleared' };
+    }
+
+    await this.licenseRepository.update(license.id, { bound_user_id: null });
+    await this.activationRepository.update({ license_id: license.id }, { is_active: false });
+    await this.userRepository.update(userId, { license_key: null });
+    await this.auditService.record({
+      actorUserId: userId,
+      action: 'license.deactivate',
+      entityType: 'license',
+      entityId: String(license.id),
+      metadata: { outcome: 'success' },
+    });
+
+    return { success: true, message: 'License deactivated' };
+  }
+
   /**
    * Deactivate license and all activations
    */
@@ -174,16 +267,59 @@ export class LicenseService {
    * Check if user has active license access
    */
   async validateAccess(userId: number): Promise<boolean> {
-    // Check if user has a license assigned
-    const result = await this.licenseRepository
-      .createQueryBuilder('l')
-      .where('l.is_active = true')
-      .andWhere('l.expires_at IS NULL OR l.expires_at > NOW()')
-      .getRawMany();
+    const user = await this.userRepository.findOneBy({ id: userId });
+    if (!user?.license_key) {
+      return false;
+    }
 
-    // In a real implementation, this would check user.license_key
-    // For now, return true if any license exists
-    return result.length > 0;
+    const license = await this.licenseRepository.findOneBy({ key_display: user.license_key });
+    return Boolean(license && license.bound_user_id === userId && this.isLicenseUsable(license));
+  }
+
+  private assertUsableLicense(license: License) {
+    if (!this.isLicenseUsable(license)) {
+      throw new ForbiddenException(license.is_active ? 'License expired' : 'License is inactive');
+    }
+  }
+
+  private isLicenseUsable(license: License): boolean {
+    if (!license.is_active) {
+      return false;
+    }
+    return !license.expires_at || new Date(license.expires_at) >= new Date();
+  }
+
+  private buildFreeStatus() {
+    return {
+      active: false,
+      tier: LicenseTier.FREE,
+      expiry: null,
+      activationCount: 0,
+      maxActivations: 0,
+      limits: this.getTierLimits(LicenseTier.FREE),
+    };
+  }
+
+  private buildStatus(license: License, active: boolean, activationCount: number) {
+    return {
+      active,
+      tier: license.tier,
+      expiry: license.expires_at,
+      activationCount,
+      maxActivations: license.max_activations,
+      limits: this.getTierLimits(license.tier),
+    };
+  }
+
+  private getTierLimits(tier: LicenseTier) {
+    const limits = {
+      [LicenseTier.FREE]: { accounts: 3, postsPerDay: 10, proxyPool: false, aiVideo: false },
+      [LicenseTier.BASIC]: { accounts: 10, postsPerDay: 50, proxyPool: false, aiVideo: false },
+      [LicenseTier.PRO]: { accounts: 50, postsPerDay: 200, proxyPool: true, aiVideo: true },
+      [LicenseTier.ENTERPRISE]: { accounts: null, postsPerDay: null, proxyPool: true, aiVideo: true },
+    };
+
+    return limits[tier] ?? limits[LicenseTier.FREE];
   }
 
   /**

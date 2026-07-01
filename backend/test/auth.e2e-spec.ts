@@ -13,7 +13,7 @@ import { LicenseTier } from '../src/common/enums/license-tier.enum';
 describe('AuthController (e2e)', () => {
   let app: INestApplication;
   let userRepository: Repository<User>;
-  let refreshTokenRepository: Repository<RefreshToken>;
+  let refresh_tokenRepository: Repository<RefreshToken>;
 
   beforeAll(async () => {
     // Set env vars for local docker connection before AppModule loads
@@ -32,7 +32,7 @@ describe('AuthController (e2e)', () => {
     await app.init();
 
     userRepository = moduleFixture.get<Repository<User>>(getRepositoryToken(User));
-    refreshTokenRepository = moduleFixture.get<Repository<RefreshToken>>(getRepositoryToken(RefreshToken));
+    refresh_tokenRepository = moduleFixture.get<Repository<RefreshToken>>(getRepositoryToken(RefreshToken));
   });
 
   afterAll(async () => {
@@ -40,7 +40,7 @@ describe('AuthController (e2e)', () => {
   });
 
   beforeEach(async () => {
-    await refreshTokenRepository.query('DELETE FROM refresh_tokens');
+    await refresh_tokenRepository.query('DELETE FROM refresh_tokens');
     await userRepository.query('DELETE FROM users');
     await userRepository.query('DELETE FROM license_activations');
     await userRepository.query('DELETE FROM licenses');
@@ -57,8 +57,8 @@ describe('AuthController (e2e)', () => {
         })
         .expect(201);
 
-      expect(response.body.data).toHaveProperty('accessToken');
-      expect(response.body.data).toHaveProperty('refreshToken');
+      expect(response.body.data).toHaveProperty('access_token');
+      expect(response.body.data).toHaveProperty('refresh_token');
       expect(response.body.data.user).toHaveProperty('email', 'admin@test.com');
       expect(response.body.data.user).toHaveProperty('role', 'admin');
       expect(response.body.data.user).not.toHaveProperty('password_hash');
@@ -110,8 +110,8 @@ describe('AuthController (e2e)', () => {
         })
         .expect(201);
 
-      expect(response.body.data).toHaveProperty('accessToken');
-      expect(response.body.data).toHaveProperty('refreshToken');
+      expect(response.body.data).toHaveProperty('access_token');
+      expect(response.body.data).toHaveProperty('refresh_token');
       expect(response.body.data.user).not.toHaveProperty('password_hash');
     });
 
@@ -148,7 +148,7 @@ describe('AuthController (e2e)', () => {
 
   describe('Token rotation & replay attack', () => {
     let refreshToken: string;
-    let accessToken: string;
+    let access_token: string;
 
     beforeEach(async () => {
       await userRepository.query(
@@ -160,8 +160,8 @@ describe('AuthController (e2e)', () => {
         .post('/auth/login')
         .send({ email: 'rotate@test.com', password: 'StrongPass123!' });
 
-      accessToken = res.body.data.accessToken;
-      refreshToken = res.body.data.refreshToken;
+      access_token = res.body.data.access_token;
+      refreshToken = res.body.data.refresh_token;
     });
 
     it('should refresh token and return new pair', async () => {
@@ -171,9 +171,9 @@ describe('AuthController (e2e)', () => {
         .send({ refreshToken })
         .expect(201);
 
-      expect(response.body.data).toHaveProperty('accessToken');
-      expect(response.body.data).toHaveProperty('refreshToken');
-      expect(response.body.data.refreshToken).not.toBe(refreshToken);
+      expect(response.body.data).toHaveProperty('access_token');
+      expect(response.body.data).toHaveProperty('refresh_token');
+      expect(response.body.data.refresh_token).not.toBe(refreshToken);
     });
 
     it('should reject replay of already-used refresh token with 401', async () => {
@@ -193,7 +193,7 @@ describe('AuthController (e2e)', () => {
       // TODO: Skip for now to proceed to License Module. Fix Throttler & JWT config later.
       const response = await request(app.getHttpServer())
         .get('/auth/me')
-        .set('Authorization', `Bearer ${accessToken}`)
+        .set('Authorization', `Bearer ${access_token}`)
         .expect(200);
 
       expect(response.body.data).toHaveProperty('email', 'rotate@test.com');
@@ -234,7 +234,7 @@ describe('AuthController (e2e)', () => {
           password: 'StrongPass123!',
           displayName: 'Admin User',
         });
-      adminToken = adminRes.body.data.accessToken;
+      adminToken = adminRes.body.data.access_token;
 
       // Register viewer (second user)
       const viewerRes = await request(app.getHttpServer())
@@ -244,7 +244,7 @@ describe('AuthController (e2e)', () => {
           password: 'StrongPass123!',
           displayName: 'Viewer User',
         });
-      viewerToken = viewerRes.body.data.accessToken;
+      viewerToken = viewerRes.body.data.access_token;
     });
 
     it('should block viewer from admin-only license create endpoint', async () => {
@@ -252,7 +252,7 @@ describe('AuthController (e2e)', () => {
         .post('/license')
         .set('Authorization', `Bearer ${viewerToken}`)
         .send({
-          tier: LicenseTier.STANDARD,
+          tier: LicenseTier.PRO,
           maxDevices: 2,
           maxActivations: 3,
         })
@@ -264,7 +264,7 @@ describe('AuthController (e2e)', () => {
         .post('/license')
         .set('Authorization', `Bearer ${adminToken}`)
         .send({
-          tier: LicenseTier.STANDARD,
+          tier: LicenseTier.PRO,
           maxDevices: 2,
           maxActivations: 3,
         })
@@ -286,13 +286,13 @@ describe('AuthController (e2e)', () => {
           password: 'StrongPass123!',
           displayName: 'Admin User',
         });
-      adminToken = adminRes.body.data.accessToken;
+      adminToken = adminRes.body.data.access_token;
 
       const licenseRes = await request(app.getHttpServer())
         .post('/license')
         .set('Authorization', `Bearer ${adminToken}`)
         .send({
-          tier: LicenseTier.STANDARD,
+          tier: LicenseTier.PRO,
           maxDevices: 1,
           maxActivations: 1,
         });

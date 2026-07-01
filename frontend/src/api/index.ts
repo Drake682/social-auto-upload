@@ -99,7 +99,7 @@ class ApiService {
         refreshToken: authStore.refreshToken,
       });
 
-      const { accessToken, refreshToken } = response.data.data; // data.data — TransformInterceptor wrapper
+      const { access_token: accessToken, refresh_token: refreshToken } = response.data.data;
       authStore.setTokens(accessToken, refreshToken);
       return accessToken;
     } catch (error) {
