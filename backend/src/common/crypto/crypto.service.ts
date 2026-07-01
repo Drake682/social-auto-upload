@@ -17,10 +17,10 @@ export class CryptoService {
   private readonly encryptionKey: Buffer;
 
   constructor(private readonly configService: ConfigService) {
-    const envKey = this.configService.get<string>('ENCRYPTION_KEY');
+    const envKey = this.configService.get<string>('COOKIE_ENCRYPTION_KEY') || this.configService.get<string>('ENCRYPTION_KEY');
     if (!envKey) {
       throw new InternalServerErrorException(
-        'ENCRYPTION_KEY is not set in environment variables',
+        'COOKIE_ENCRYPTION_KEY is not set in environment variables',
       );
     }
 

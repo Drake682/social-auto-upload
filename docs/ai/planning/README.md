@@ -24,9 +24,14 @@ description: Break down work into actionable tasks and estimate timeline
 - [x] Task 3: Frontend auth wiring
 - [x] Task 6: Docs + regression verification
 
-### Phase 2: Core Features
-- [ ] Task 2.1: [Description]
-- [ ] Task 2.2: [Description]
+### Phase 2: Account Manager CRM
+- [x] Task 1: Platform enum + cookie env key rename
+- [x] Task 2: Soft delete + UpdateAccountDto + ListAccountsQueryDto
+- [x] Task 3: POST /accounts/import-bulk
+- [x] Task 4: GET /accounts/:id/health + Cron scheduler
+- [x] Task 5: AccountsService unit tests
+- [x] Task 6: Frontend filter + pagination + ImportBulkDialog + real health ping
+- [x] Task 7: Docs + regression
 
 ### Phase 3: Integration & Polish
 - [ ] Task 3.1: [Description]

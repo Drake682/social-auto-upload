@@ -1,20 +1,19 @@
 import { IsEnum, IsObject, IsOptional, IsString, IsUrl, MaxLength } from 'class-validator';
 import { Platform } from '../enums/platform.enum';
 
-export class CreateAccountDto {
+export class UpdateAccountDto {
+  @IsOptional()
   @IsEnum(Platform, { message: 'platform must be one of: facebook, youtube, tiktok_vn, tiktok_us, instagram, shopee (legacy: tiktok)' })
-  platform: Platform;
+  platform?: Platform;
 
+  @IsOptional()
   @IsString()
   @MaxLength(200)
-  account_name: string;
+  account_name?: string;
 
-  /**
-   * Accept raw session_data as any JSON-serializable object.
-   * The service will stringify and encrypt before storing.
-   */
+  @IsOptional()
   @IsObject()
-  session_data: Record<string, any>;
+  session_data?: Record<string, any>;
 
   @IsOptional()
   @IsString()

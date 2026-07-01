@@ -50,10 +50,10 @@ description: Define testing approach, test cases, and quality assurance
 - [x] User normalization maps backend `display_name` to frontend `displayName` for layout display.
 - [ ] No frontend unit test runner exists yet; build is current verification gate.
 
-### Component/Module 2
-- [ ] Test case 1: [Description]
-- [ ] Test case 2: [Description]
-- [ ] Additional coverage: [Description]
+### Phase 2 — Account Manager CRM
+- [x] `backend/src/accounts/accounts.service.spec.ts` verifies AES-256-GCM encrypted storage does not contain plaintext session data and API responses omit `session_data`.
+- [x] AccountsService tests cover platform filter + pagination, tenant-scoped soft delete, JSON/CSV bulk import, partial failure reports, and health ping alive/dead/unconfigured/failure paths.
+- [x] `frontend` production build verifies Accounts table, platform filter, pagination, bulk import dialog, and real health ping wiring compile cleanly.
 
 ## Integration Tests
 **How do we test component interactions?**

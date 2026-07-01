@@ -6,12 +6,16 @@ import {
   Delete,
   Param,
   Body,
+  Query,
   UseGuards,
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
 import { AccountsService } from './accounts.service';
 import { CreateAccountDto } from './dto/create-account.dto';
+import { UpdateAccountDto } from './dto/update-account.dto';
+import { ListAccountsQueryDto } from './dto/list-accounts-query.dto';
+import { ImportBulkDto } from './dto/import-bulk.dto';
 import { UpdateAccountStatusDto } from './dto/update-account-status.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -37,9 +41,30 @@ export class AccountsController {
    * Session data is fully excluded from response.
    */
   @Get()
-  async findAll(@CurrentUser() user: any) {
-    const result = await this.accountsService.findAll(user.sub, user.tenantId);
+  async findAll(@CurrentUser() user: any, @Query() query: ListAccountsQueryDto) {
+    const result = await this.accountsService.findAll(user.sub, user.tenantId, query);
     return { code: 200, data: result, msg: 'Accounts retrieved' };
+  }
+
+  /**
+   * POST /accounts/import-bulk — Import social accounts from JSON array or CSV.
+   * Plain session data is accepted only in request body and encrypted before DB write.
+   */
+  @Post('import-bulk')
+  @HttpCode(HttpStatus.OK)
+  async importBulk(@CurrentUser() user: any, @Body() importDto: ImportBulkDto) {
+    const result = await this.accountsService.importBulk(user.sub, user.tenantId, importDto);
+    return { code: 200, data: result, msg: 'Bulk import processed' };
+  }
+
+  /**
+   * GET /accounts/:id/health — Real uploader-backed health ping.
+   * Session data is decrypted only inside service and never returned.
+   */
+  @Get(':id/health')
+  async health(@CurrentUser() user: any, @Param('id') id: string) {
+    const result = await this.accountsService.checkHealth(user.sub, user.tenantId, parseInt(id));
+    return { code: 200, data: result, msg: 'Account health checked' };
   }
 
   /**
@@ -59,7 +84,7 @@ export class AccountsController {
   async update(
     @CurrentUser() user: any,
     @Param('id') id: string,
-    @Body() updateDto: Partial<CreateAccountDto>,
+    @Body() updateDto: UpdateAccountDto,
   ) {
     const result = await this.accountsService.update(user.sub, user.tenantId, parseInt(id), updateDto);
     return { code: 200, data: result, msg: 'Account updated' };
@@ -85,6 +110,7 @@ export class AccountsController {
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
   async remove(@CurrentUser() user: any, @Param('id') id: string) {
-    return this.accountsService.remove(user.sub, user.tenantId, parseInt(id));
+    const result = await this.accountsService.remove(user.sub, user.tenantId, parseInt(id));
+    return { code: 200, data: result, msg: 'Account deleted' };
   }
 }

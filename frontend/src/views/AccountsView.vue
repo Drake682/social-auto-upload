@@ -6,12 +6,30 @@
         <h1>Account Manager</h1>
         <p class="subtitle">Manage your social media accounts and cookies</p>
       </div>
-      <button class="btn-add" @click="openAddModal">+ Add Account</button>
+      <div class="header-actions">
+        <button class="btn-secondary" @click="showImportDialog = true">Import Bulk</button>
+        <button class="btn-add" @click="openAddModal">+ Add Account</button>
+      </div>
     </div>
 
     <!-- Global error -->
     <div v-if="store.error && !showModal" class="error-banner">
       {{ store.error }}
+    </div>
+
+    <!-- Filters -->
+    <div class="filters-card">
+      <label for="platform-filter">Platform</label>
+      <select id="platform-filter" :value="store.platformFilter" @change="handlePlatformFilter">
+        <option value="">All platforms</option>
+        <option value="facebook">Facebook</option>
+        <option value="youtube">YouTube</option>
+        <option value="tiktok_vn">TikTok VN</option>
+        <option value="tiktok_us">TikTok US</option>
+        <option value="instagram">Instagram</option>
+        <option value="shopee">Shopee</option>
+        <option value="tiktok">TikTok (Legacy)</option>
+      </select>
     </div>
 
     <!-- Table -->
@@ -60,6 +78,18 @@
       </div>
     </div>
 
+    <div class="pagination" v-if="store.total > 0">
+      <button :disabled="store.page <= 1" @click="store.setPage(store.page - 1)">Previous</button>
+      <span>Page {{ store.page }} / {{ store.totalPages }} · {{ store.total }} accounts</span>
+      <button :disabled="store.page >= store.totalPages" @click="store.setPage(store.page + 1)">Next</button>
+    </div>
+
+    <ImportBulkDialog
+      v-if="showImportDialog"
+      @close="showImportDialog = false"
+      @imported="store.fetchAccounts"
+    />
+
     <!-- Add Account Modal -->
     <div v-if="showModal" class="modal-overlay" @click.self="closeModal">
       <div class="modal">
@@ -73,7 +103,8 @@
             <label for="platform">Platform</label>
             <select id="platform" v-model="form.platform" required>
               <option value="" disabled>Select platform...</option>
-              <option value="tiktok">TikTok</option>
+              <option value="tiktok_vn">TikTok VN</option>
+              <option value="tiktok_us">TikTok US</option>
               <option value="facebook">Facebook</option>
               <option value="youtube">YouTube</option>
               <option value="instagram">Instagram</option>
@@ -125,11 +156,13 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue';
 import { useAccountStore, type Platform } from '@/stores/account.store';
+import ImportBulkDialog from '@/components/ImportBulkDialog.vue';
 
 const store = useAccountStore();
 
 // Modal state
 const showModal = ref(false);
+const showImportDialog = ref(false);
 const isSubmitting = ref(false);
 const submitError = ref('');
 const jsonError = ref('');
@@ -161,7 +194,9 @@ watch(
 // Platform display labels
 function platformLabel(platform: Platform): string {
   const labels: Record<Platform, string> = {
-    tiktok: 'TikTok',
+    tiktok: 'TikTok (Legacy)',
+    tiktok_vn: 'TikTok VN',
+    tiktok_us: 'TikTok US',
     facebook: 'Facebook',
     youtube: 'YouTube',
     instagram: 'Instagram',
@@ -226,6 +261,11 @@ async function handleSubmit() {
   }
 }
 
+function handlePlatformFilter(event: Event) {
+  const value = (event.target as HTMLSelectElement).value as Platform | '';
+  store.setPlatformFilter(value);
+}
+
 // --- Actions ---
 async function handleDelete(id: number) {
   if (!confirm('Delete this account? This cannot be undone.')) return;
@@ -268,9 +308,14 @@ onMounted(() => {
   margin: 0;
 }
 
-.btn-add {
+.header-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.btn-add,
+.btn-secondary {
   padding: 10px 20px;
-  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
   color: white;
   border: none;
   border-radius: 8px;
@@ -281,9 +326,43 @@ onMounted(() => {
   white-space: nowrap;
 }
 
-.btn-add:hover {
+.btn-add {
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+}
+
+.btn-secondary {
+  background: rgba(148, 163, 184, 0.12);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.btn-add:hover,
+.btn-secondary:hover {
   transform: translateY(-1px);
   box-shadow: 0 8px 20px rgba(59, 130, 246, 0.3);
+}
+
+.filters-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(30, 41, 59, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.08);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+
+.filters-card label {
+  color: #cbd5e1;
+  font-size: 13px;
+}
+
+.filters-card select {
+  padding: 8px 12px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 8px;
+  color: #f1f5f9;
 }
 
 /* Error banner */
@@ -350,7 +429,9 @@ td {
   font-weight: 600;
 }
 
-.platform-tiktok  { background: rgba(0, 0, 0, 0.4); color: #fff;       border: 1px solid rgba(255, 255, 255, 0.2); }
+.platform-tiktok,
+.platform-tiktok_vn,
+.platform-tiktok_us { background: rgba(0, 0, 0, 0.4); color: #fff; border: 1px solid rgba(255, 255, 255, 0.2); }
 .platform-facebook { background: rgba(24, 119, 242, 0.15); color: #1877F2; border: 1px solid rgba(24, 119, 242, 0.3); }
 .platform-youtube  { background: rgba(255, 0, 0, 0.1);   color: #FF0000; border: 1px solid rgba(255, 0, 0, 0.25); }
 .platform-instagram{ background: rgba(225, 48, 108, 0.12); color: #E1306C; border: 1px solid rgba(225, 48, 108, 0.3); }
@@ -392,6 +473,30 @@ td {
 
 .btn-ping:hover { background: rgba(234, 179, 8, 0.12);  border-color: rgba(234, 179, 8, 0.3); }
 .btn-delete:hover { background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.3); }
+
+.pagination {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.pagination button {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  background: rgba(30, 41, 59, 0.6);
+  color: #e2e8f0;
+  cursor: pointer;
+}
+
+.pagination button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 
 /* Empty state */
 .empty-state {

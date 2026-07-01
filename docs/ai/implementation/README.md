@@ -31,7 +31,9 @@ description: Technical implementation notes, patterns, and code guidelines
 - Phase 1 Task 4 adds a global `LicenseGuard` after JWT and role guards; public routes and license bootstrap/admin routes are exempt through `@Public()` / `@SkipLicense()` metadata.
 - Phase 1 Task 5 adds best-effort audit logging for auth/license events, rate limits `/auth/refresh` and `/license/activate`, and exposes `GET /auth/sessions` without refresh token hashes.
 - Phase 1 Task 3 aligns Vue auth store and Axios refresh queue with backend snake_case token contract and normalizes backend `display_name` to frontend `displayName`.
-- Feature 3: Implementation approach
+- Phase 2 implements Account Manager CRM with tenant-scoped CRUD, `tiktok_vn`/`tiktok_us` plus legacy `tiktok`, soft delete, filter/pagination, JSON/CSV bulk import, uploader-backed health ping, and 6-hour scheduled health checks.
+- Account cookies/session data are encrypted with AES-256-GCM using `COOKIE_ENCRYPTION_KEY` preferred and `ENCRYPTION_KEY` fallback; API responses strip `session_data` and health logs include summary counts only.
+- Frontend Accounts page supports platform filtering, pagination, bulk import dialog, health badges, and real `GET /accounts/:id/health` checks.
 
 ### Patterns & Best Practices
 - Auth token responses are normalized in `AuthService._tokenResponse()` to prevent endpoint-specific response drift.

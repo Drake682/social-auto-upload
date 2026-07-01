@@ -2,7 +2,7 @@ import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import { api } from '@/api';
 
-export type Platform = 'tiktok' | 'facebook' | 'youtube' | 'instagram' | 'shopee';
+export type Platform = 'tiktok' | 'tiktok_vn' | 'tiktok_us' | 'facebook' | 'youtube' | 'instagram' | 'shopee';
 export type AccountStatus = 'active' | 'dead' | 'checking';
 
 export interface SocialAccount {
@@ -22,23 +22,54 @@ export interface AddAccountPayload {
   session_data: Record<string, any>;
 }
 
+export interface BulkImportResult {
+  total: number;
+  success: number;
+  failed: number;
+  errors: Array<{ row: number; reason: string }>;
+}
+
 export const useAccountStore = defineStore('accounts', () => {
   const accounts = ref<SocialAccount[]>([]);
   const isLoading = ref(false);
   const error = ref<string | null>(null);
+  const platformFilter = ref<Platform | ''>('');
+  const page = ref(1);
+  const limit = ref(20);
+  const total = ref(0);
+  const totalPages = ref(1);
 
   async function fetchAccounts() {
     isLoading.value = true;
     error.value = null;
 
     try {
-      const response = await api.get('/accounts');
-      accounts.value = response.data.data;
+      const response = await api.get('/accounts', {
+        params: {
+          page: page.value,
+          limit: limit.value,
+          ...(platformFilter.value ? { platform: platformFilter.value } : {}),
+        },
+      });
+      accounts.value = response.data.data.items;
+      total.value = response.data.data.meta.total;
+      totalPages.value = response.data.data.meta.totalPages || 1;
     } catch (err: any) {
       error.value = err.response?.data?.msg || err.response?.data?.message || 'Failed to load accounts';
     } finally {
       isLoading.value = false;
     }
+  }
+
+  async function setPlatformFilter(platform: Platform | '') {
+    platformFilter.value = platform;
+    page.value = 1;
+    await fetchAccounts();
+  }
+
+  async function setPage(nextPage: number) {
+    page.value = Math.min(Math.max(nextPage, 1), totalPages.value || 1);
+    await fetchAccounts();
   }
 
   async function addAccount(payload: AddAccountPayload) {
@@ -48,7 +79,7 @@ export const useAccountStore = defineStore('accounts', () => {
     try {
       const response = await api.post('/accounts', payload);
       const newAccount: SocialAccount = response.data.data;
-      accounts.value.unshift(newAccount); // prepend — newest first
+      accounts.value.unshift(newAccount);
       return { success: true, account: newAccount };
     } catch (err: any) {
       const message = err.response?.data?.msg || err.response?.data?.message || 'Failed to add account';
@@ -59,12 +90,30 @@ export const useAccountStore = defineStore('accounts', () => {
     }
   }
 
+  async function importBulk(format: 'json' | 'csv', payload: string) {
+    error.value = null;
+
+    try {
+      const body = format === 'json'
+        ? { format, accounts: JSON.parse(payload) }
+        : { format, csv: payload };
+      const response = await api.post('/accounts/import-bulk', body);
+      await fetchAccounts();
+      return { success: true, result: response.data.data as BulkImportResult };
+    } catch (err: any) {
+      const message = err.response?.data?.msg || err.response?.data?.message || err.message || 'Failed to import accounts';
+      error.value = message;
+      return { success: false, message };
+    }
+  }
+
   async function deleteAccount(id: number) {
     error.value = null;
 
     try {
       await api.delete(`/accounts/${id}`);
       accounts.value = accounts.value.filter((a) => a.id !== id);
+      total.value = Math.max(total.value - 1, 0);
       return { success: true };
     } catch (err: any) {
       const message = err.response?.data?.msg || err.response?.data?.message || 'Failed to delete account';
@@ -77,18 +126,22 @@ export const useAccountStore = defineStore('accounts', () => {
     error.value = null;
 
     try {
-      // Set local status to 'checking' immediately for UX feedback
       const account = accounts.value.find((a) => a.id === id);
       if (account) account.status = 'checking';
 
-      const response = await api.patch(`/accounts/${id}/status`, { status: 'checking' });
-      const updated: SocialAccount = response.data.data;
+      const response = await api.get(`/accounts/${id}/health`);
+      const health = response.data.data as { alive: boolean | null; checked_at: string };
 
-      // Replace with server response
       const index = accounts.value.findIndex((a) => a.id === id);
-      if (index !== -1) accounts.value[index] = updated;
+      if (index !== -1) {
+        accounts.value[index] = {
+          ...accounts.value[index],
+          status: health.alive === true ? 'active' : health.alive === false ? 'dead' : 'checking',
+          last_health_check: health.checked_at,
+        };
+      }
 
-      return { success: true };
+      return { success: true, health };
     } catch (err: any) {
       const message = err.response?.data?.msg || err.response?.data?.message || 'Health check failed';
       error.value = message;
@@ -100,8 +153,16 @@ export const useAccountStore = defineStore('accounts', () => {
     accounts,
     isLoading,
     error,
+    platformFilter,
+    page,
+    limit,
+    total,
+    totalPages,
     fetchAccounts,
+    setPlatformFilter,
+    setPage,
     addAccount,
+    importBulk,
     deleteAccount,
     checkHealth,
   };
